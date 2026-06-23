@@ -1,0 +1,65 @@
+using System.Text.Json;
+using JET.Domain;
+
+namespace JET.Application;
+
+public sealed class DevDbOverviewHandler(
+    IDevDatabaseInspector inspector,
+    IProjectStore projectStore,
+    IProjectSession session) : IApplicationActionHandler
+{
+    public string Action => "dev.db.overview";
+
+    public async Task<object?> HandleAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var projectId = session.RequireProjectId();
+
+        var document = await projectStore.FindAsync(projectId, cancellationToken)
+            ?? throw new JetActionException(JetErrorCodes.ProjectNotFound, $"找不到專案 '{projectId}'。");
+
+        var overview = await inspector.GetOverviewAsync(projectId, cancellationToken);
+
+        return new
+        {
+            databasePath = overview.DatabasePath,
+            databaseProvider = document.DatabaseProvider,
+            fileSizeBytes = overview.FileSizeBytes,
+            sqliteVersion = overview.EngineVersion,
+            tables = overview.Tables.Select(t => new { name = t.Name, rowCount = t.RowCount }).ToList()
+        };
+    }
+}
+
+public sealed class DevDbTableDataHandler(
+    IDevDatabaseInspector inspector,
+    IProjectSession session) : IApplicationActionHandler
+{
+    private const int DefaultLimit = 50;
+    private const int MaxLimit = 200;
+
+    public string Action => "dev.db.tableData";
+
+    public async Task<object?> HandleAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var projectId = session.RequireProjectId();
+
+        var tableName = PayloadReader.GetRequiredString(payload, "tableName");
+        var limit = Math.Clamp(PayloadReader.GetOptionalInt(payload, "limit") ?? DefaultLimit, 1, MaxLimit);
+        var offset = Math.Max(PayloadReader.GetOptionalInt(payload, "offset") ?? 0, 0);
+
+        var page = await inspector.GetTablePageAsync(projectId, tableName, limit, offset, cancellationToken)
+            ?? throw new JetActionException(
+                JetErrorCodes.TableNotAllowed,
+                $"資料表 '{tableName}' 不存在或不允許查詢。");
+
+        return new
+        {
+            tableName = page.TableName,
+            columns = page.Columns,
+            rows = page.Rows,
+            totalCount = page.TotalCount,
+            limit = page.Limit,
+            offset = page.Offset
+        };
+    }
+}

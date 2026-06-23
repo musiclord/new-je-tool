@@ -1,0 +1,79 @@
+# ===== IDE & OS =====
+.vs/
+.vshistory/
+.idea/
+*.user
+*.rsuser
+*.userosscache
+*.suo
+*.sln.docstates
+*.DotSettings.user
+.DS_Store
+Thumbs.db
+
+# VS Code：共用設定（settings / tasks / launch / extensions）入版控以跨裝置同步，其餘忽略
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Claude Code：本機個人設定不同步（settings.json 入版控供團隊／後續 agent 共用）
+.claude/settings.local.json
+CLAUDE.local.md
+
+# obra/superpowers 以「專案層級外掛」安裝：marketplace 與啟用宣告寫在 .claude/settings.json（入版控），
+# 外掛實體檔由 Claude Code 安裝在 ~/.claude/plugins/（repo 外），不需在此 ignore，也不再以 symlink 塞進 .claude/skills/。
+
+# ===== .NET build outputs =====
+[Bb]in/
+[Oo]bj/
+publish/
+out/
+artifacts/
+TestResults/
+*.binlog
+*.trx
+*.coverage
+*.coveragexml
+x64/
+x86/
+*.log
+
+# ===== NuGet =====
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+
+# Local .NET CLI home / cache
+.dotnet/
+
+# ===== JET 執行期產物 =====
+# JET.exe 會在所在資料夾自動建立 projects/{projectId}/project.json + jet.db
+projects/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# WebView2 使用者資料（若意外產生在 repo 內）
+EBWebView/
+*.WebView2/
+
+# ===== Legacy VBA artifacts =====
+*.frx
+*.accdb
+
+# ===== Sensitive files =====
+*.env
+.env.*
+!.env.example
+!.env.template
+appsettings.Development.json
+
+# superpowers brainstorm 暫存（視覺夥伴 session），不入庫
+.superpowers/
+
+# Stryker.NET 突變測試報告（產物，不入庫；設定檔 stryker-config.json 與工具 manifest 才入庫）
+StrykerOutput/

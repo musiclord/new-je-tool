@@ -1,0 +1,18 @@
+{
+    "chat.promptFiles": true,
+    "github.copilot.chat.agent.autoFix": false,
+    "github.copilot.chat.agent.currentEditorContext.enabled": false,
+    "github.copilot.chat.alternateGptPrompt.enabled": false,
+    "github.copilot.chat.codesearch.enabled": true,
+    "github.copilot.chat.completionsFetcher": "node-fetch",
+    "github.copilot.chat.copilotDebugCommand.enabled": false,
+    "github.copilot.chat.edits.suggestRelatedFilesForTests": false,
+    "github.copilot.chat.edits.suggestRelatedFilesFromGitHistory": false,
+    "github.copilot.chat.nesFetcher": "node-fetch",
+    "github.copilot.chat.newWorkspaceCreation.enabled": false,
+    "github.copilot.chat.reviewAgent.enabled": false,
+    "github.copilot.chat.reviewSelection.enabled": false,
+    "github.copilot.chat.setupTests.enabled": false,
+    "github.copilot.chat.tools.memory.enabled": true,
+    "chat.disableAIFeatures": false
+}

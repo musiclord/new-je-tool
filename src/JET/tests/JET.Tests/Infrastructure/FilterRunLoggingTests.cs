@@ -1,0 +1,93 @@
+using JET.Domain;
+using JET.Infrastructure;
+using Microsoft.Extensions.Logging;
+using Xunit;
+
+namespace JET.Tests.Infrastructure;
+
+/// <summary>
+/// Filter repo 診斷日誌（TDD #1：完整 SQL、參數值、duration、rows_affected、provider）。
+/// oracle：規格——PreviewAsync 對 target_gl_entry 下 COUNT 與預覽 SELECT；動態 WHERE 由 WhereBuilder
+/// 落地、使用者值參數綁定，故應出現在 sql.executed 的 sql/parameters 欄位。
+/// 斷言鎖「SQL 內容＋綁定值身分」（非筆數）。SqlServer 側以 LocalDB 閘控，無則靜默跳過。
+/// </summary>
+public sealed class FilterRunLoggingTests
+{
+    private const long DistinctiveAmount = 123_456L; // 可辨識的下限值，應原樣出現在 parameters
+
+    // 單一 NumRange 規則：金額下限。值參數綁定 → parameters 應含 DistinctiveAmount。
+    private static FilterScenarioSpec AmountFromScenario() =>
+        new("logging", "amount lower bound",
+        [
+            new FilterGroupSpec(FilterJoin.And,
+            [
+                new FilterRuleSpec(FilterJoin.And, FilterRuleType.NumRange, null, "amount",
+                    [], TextMatchMode.Contains, null, null, DistinctiveAmount, null, null, null)
+            ])
+        ]);
+
+    private static FilterRuleContext Context => new(100, "2025-12-31", "2025-01-01", "2025-12-31");
+
+    private static (RingBufferLoggerProvider Diagnostic, ILoggerFactory Factory) NewDiagnostic()
+    {
+        var diagnostic = new RingBufferLoggerProvider(5000);
+        var factory = LoggerFactory.Create(builder =>
+        {
+            builder.SetMinimumLevel(LogLevel.Trace);
+            builder.AddProvider(diagnostic);
+        });
+        return (diagnostic, factory);
+    }
+
+    private static void AssertFilterSql(RingBufferLoggerProvider diagnostic, string expectedProvider)
+    {
+        var sql = diagnostic.Snapshot().Where(e => e.EventName == "sql.executed").ToList();
+        Assert.NotEmpty(sql);
+        Assert.All(sql, e => Assert.Equal(expectedProvider, e.Fields["provider"]?.ToString()));
+        Assert.All(sql, e => Assert.True(Convert.ToInt64(e.Fields["duration_ms"]) >= 0));
+        Assert.All(sql, e => Assert.Equal(-1, Convert.ToInt32(e.Fields["rows_affected"]))); // SELECT → -1（非寫入）
+        // 預覽下兩種 SELECT：COUNT 與逐欄預覽，皆作用於 target_gl_entry
+        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("FROM target_gl_entry"));
+        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("document_number"));
+        // 動態 WHERE 的使用者值參數綁定（WhereBuilder 落地處）→ parameters 含可辨識下限值
+        Assert.Contains(sql, e => e.Fields["parameters"]!.ToString()!.Contains(DistinctiveAmount.ToString()));
+    }
+
+    [Fact]
+    public async Task Preview_Sqlite_LogsSql_WithDynamicWhereAndBoundParameterValue()
+    {
+        using var root = new TempProjectRoot();
+        var folder = new JetProjectFolder(root.Path);
+        var database = new JetProjectDatabase(folder);
+        var projectId = Guid.NewGuid().ToString("N");
+        Directory.CreateDirectory(folder.GetProjectDirectory(projectId));
+
+        var (diagnostic, factory) = NewDiagnostic();
+        using (factory)
+        {
+            var repo = new SqliteFilterRunRepository(database, factory.CreateLogger<SqliteFilterRunRepository>());
+            await repo.PreviewAsync(projectId, AmountFromScenario(), Context, CancellationToken.None);
+        }
+
+        AssertFilterSql(diagnostic, "sqlite");
+    }
+
+    [SqlServerFact]
+    public async Task Preview_SqlServer_LogsSql_WhenLocalDbAvailable()
+    {
+        await using var temp = await TempSqlServerProject.TryCreateAsync();
+        if (temp is null)
+        {
+            return; // 無 LocalDB → 跳過（mystery-guest 豁免）
+        }
+
+        var (diagnostic, factory) = NewDiagnostic();
+        using (factory)
+        {
+            var repo = new SqlServerFilterRunRepository(temp.Database, factory.CreateLogger<SqlServerFilterRunRepository>());
+            await repo.PreviewAsync(temp.ProjectId, AmountFromScenario(), Context, CancellationToken.None);
+        }
+
+        AssertFilterSql(diagnostic, "sqlServer");
+    }
+}

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JET 傳票測試工具</title>
+  <link rel="stylesheet" href="./css/app.css">
+  <!-- 載入順序：傳輸（jet-api）→ 狀態（state）→ 共用核心（ui-core）→
+       各步驟渲染器（自行註冊）→ 開發面板 → 殼層與啟動（app） -->
+  <script defer src="./js/jet-api.js"></script>
+  <script defer src="./js/state.js"></script>
+  <script defer src="./js/ui-core.js"></script>
+  <script defer src="./js/steps/create-step.js"></script>
+  <script defer src="./js/steps/import-step.js"></script>
+  <script defer src="./js/steps/mapping-step.js"></script>
+  <script defer src="./js/steps/validate-step.js"></script>
+  <script defer src="./js/steps/filter-step.js"></script>
+  <script defer src="./js/steps/export-step.js"></script>
+  <script defer src="./js/data-preview.js"></script>
+  <script defer src="./js/dev-panel.js"></script>
+  <script defer src="./js/dev-log-panel.js"></script>
+  <script defer src="./js/app.js"></script>
+</head>
+<body>
+  <main id="app" class="app-shell" data-jet-root>
+    <!-- 頂部標題列 -->
+    <header class="app-header">
+      <div class="app-header__brand">
+        <span class="app-header__eyebrow">Journal Entry Testing</span>
+        <h1 class="app-header__title">JET 傳票測試工具</h1>
+      </div>
+      <div class="app-header__status">
+        <span class="badge" data-bind="bridge-status" title="WebView2 主機連線狀態">主機連線：偵測中</span>
+        <button type="button" class="btn btn--ghost" data-action="app-back-picker" data-bind="back-picker"
+          title="保存目前進度並回到專案選擇畫面，可切換其他專案" hidden>回專案選擇</button>
+        <button type="button" class="btn btn--ghost" data-action="app-exit"
+          title="保存目前進度到專案資料庫，下次開啟時回到相同位置">儲存並結束</button>
+      </div>
+    </header>
+
+    <!-- 案件狀態摘要 -->
+    <section class="case-summary" aria-label="案件狀態摘要">
+      <div class="case-summary__item">
+        <span class="case-summary__label">案件編號</span>
+        <span class="case-summary__value case-summary__value--mono" data-bind="case-id">尚未建立</span>
+      </div>
+      <div class="case-summary__item">
+        <span class="case-summary__label">客戶名稱</span>
+        <span class="case-summary__value" data-bind="case-client">—</span>
+      </div>
+      <div class="case-summary__item">
+        <span class="case-summary__label">目前階段</span>
+        <span class="case-summary__value" data-bind="case-step">建立案件</span>
+      </div>
+      <div class="case-summary__item">
+        <span class="case-summary__label">進度</span>
+        <span class="case-summary__value case-summary__value--mono" data-bind="case-progress">1 / 6</span>
+      </div>
+    </section>
+
+    <!-- 主要工作區：視圖（picker / workflow）+ 兩視圖共用的「狀態與訊息」面板 -->
+    <div class="app-main" data-bind="app-main">
+      <!-- 專案選擇畫面（啟動入口；選定或建立專案後切換到工作流程） -->
+      <section class="project-picker" aria-label="專案選擇" data-bind="project-picker" hidden></section>
+
+      <div class="app-body" data-bind="app-body">
+        <!-- 主要流程步驟 -->
+        <nav class="step-nav" aria-label="流程步驟" data-bind="step-nav"></nav>
+
+        <!-- 中央內容區 -->
+        <section class="content" aria-label="步驟內容" data-bind="content"></section>
+      </div>
+
+      <!-- 狀態 / 訊息區：picker 與 workflow 共用同一面板；預設收合為右側窄欄，展開後浮於右側；歷史持久化於專案資料庫（log.append / log.recent） -->
+      <aside class="messages messages--collapsed" aria-label="狀態與訊息" data-bind="messages-panel">
+        <button type="button" class="messages__rail" data-action="messages-toggle"
+          title="展開狀態與訊息" aria-expanded="false">
+          <span class="messages__rail-label">訊息</span>
+          <span class="messages__badge" data-bind="message-badge" hidden>0</span>
+        </button>
+        <div class="messages__panel" aria-live="polite">
+          <div class="messages__header">
+            <h2 class="messages__title">狀態與訊息</h2>
+            <button type="button" class="messages__collapse" data-action="messages-toggle"
+              title="收合訊息面板" aria-label="收合訊息面板">&rsaquo;</button>
+          </div>
+          <ul class="messages__list" data-bind="message-list"></ul>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 資料預覽（正式版功能）：使用者檢視目前操作資料的有界預覽 -->
+    <details class="data-preview" data-bind="data-preview">
+      <summary class="data-preview__summary">資料預覽 — 檢視匯入原貌與標準化後資料</summary>
+      <div class="data-preview__body" data-bind="data-preview-body"></div>
+    </details>
+
+    <!-- 開發工具：資料庫檢視（僅 Debug 組建顯示與註冊，非審計 workflow） -->
+    <details class="dev-panel" data-bind="dev-panel">
+      <summary class="dev-panel__summary">DEV — <span data-bind="dev-provider-label"></span>資料庫檢視</summary>
+      <div class="dev-panel__body" data-bind="dev-panel-body"></div>
+    </details>
+
+    <!-- 開發工具：診斷日誌匯出 NDJSON（僅 Debug 組建顯示與註冊，非審計 workflow） -->
+    <details class="dev-panel" data-bind="dev-log-panel">
+      <summary class="dev-panel__summary">DEV — 診斷日誌匯出（NDJSON）</summary>
+      <div class="dev-panel__body" data-bind="dev-log-panel-body"></div>
+    </details>
+  </main>
+  <noscript>JET 需要啟用 JavaScript 才能運作。</noscript>
+</body>
+</html>
