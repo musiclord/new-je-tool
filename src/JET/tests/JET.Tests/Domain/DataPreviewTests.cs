@@ -20,6 +20,8 @@ public sealed class DataPreviewTests
     [InlineData("tbBalances", DataPreviewDataset.TbBalances)]
     [InlineData("accountMappings", DataPreviewDataset.AccountMappings)]
     [InlineData("authorizedPreparers", DataPreviewDataset.AuthorizedPreparers)]
+    [InlineData("dateDimension", DataPreviewDataset.DateDimension)]
+    [InlineData("schemaOverview", DataPreviewDataset.SchemaOverview)]
     public void TryParse_KnownWireName_ReturnsExpectedDataset(string wireName, DataPreviewDataset expected)
     {
         var parsed = DataPreviewDatasetNames.TryParse(wireName, out var dataset);

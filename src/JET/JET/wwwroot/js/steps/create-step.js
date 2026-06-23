@@ -59,11 +59,9 @@
             kv('案件編號', state.project.projectCode) +
             kv('客戶名稱', state.project.entityName) +
             kv('操作人員', state.project.operatorId) +
-            kv('產業別', state.project.industry || '—') +
             kv('查核期間', (state.project.periodStart || '—') + ' ～ ' + (state.project.periodEnd || '—')) +
             kv('期末財報準備日', state.project.lastPeriodStart || '—') +
             kv('資料庫 Provider', providerLabel(state.project.databaseProvider)) +
-            kv('金額 scale', state.project.moneyScale) +
           '</dl>' +
           Ui.stepFooterHtml(state) +
         '</div>';
@@ -81,7 +79,6 @@
           formRow('projectCode', '案件編號', 'text', true) +
           formRow('entityName', '客戶名稱', 'text', true) +
           formRow('operatorId', '操作使用者 ID', 'text', true) +
-          formRow('industry', '產業別', 'text', false) +
           formRow('periodStart', '查核起始日', 'date', true) +
           formRow('periodEnd', '查核截止日', 'date', true) +
           formRow('lastPeriodStart', '期末財報準備起始日', 'date', false) +
@@ -109,7 +106,6 @@
         projectCode: form.projectCode.value.trim(),
         entityName: form.entityName.value.trim(),
         operatorId: form.operatorId.value.trim(),
-        industry: form.industry.value.trim() || null,
         periodStart: form.periodStart.value,
         periodEnd: form.periodEnd.value,
         lastPeriodStart: form.lastPeriodStart.value || null,

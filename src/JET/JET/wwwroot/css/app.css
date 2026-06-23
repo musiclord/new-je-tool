@@ -979,6 +979,70 @@ kbd {
   gap: 10px;
 }
 
+/* 非工作日（週末判定）：一週七天勾選 */
+.calendar-nonworking {
+  margin-top: 14px;
+}
+
+.calendar-nonworking__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.calendar-nonworking__days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.weekday-toggle {
+  position: relative;
+  cursor: pointer;
+}
+
+.weekday-toggle input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.weekday-toggle span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+
+.weekday-toggle input:checked + span {
+  background: var(--pale-blue);
+  border-color: var(--pale-blue-ink);
+  color: var(--pale-blue-ink);
+  font-weight: 600;
+}
+
+.weekday-toggle input:focus-visible + span {
+  outline: 2px solid var(--pale-blue-ink);
+  outline-offset: 1px;
+}
+
+.calendar-nonworking__hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
 /* ---- 欄位配對 ------------------------------------------------------------ */
 .panel--wide {
   max-width: 920px;
@@ -1408,6 +1472,13 @@ kbd {
   color: var(--color-muted);
 }
 
+/* 科目配對匯入門檻提示：驗證尚未執行時，以中性提示取代匯入鈕。 */
+.rule-card__gate {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
 .check-list {
   margin: 0 0 12px;
   padding: 0;
@@ -1448,52 +1519,296 @@ kbd {
   border: 1px dashed var(--color-border-strong);
 }
 
-/* ---- 進階條件篩選（Query Builder）------------------------------------------ */
-/* 快速加入：依審計意圖分組的條件「面板」——每組一列（小標題＋該組的條件鈕），
-   把一長排鈕切成幾塊，使用者只看自己要的那一塊（NN/g chunking）。 */
-.quick-add {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 12px 0 16px;
-  padding: 14px 16px;
+/* ---- 進階條件篩選（Step 4）------------------------------------------------
+   兩階段流程：先在兩個「選取區塊」（.condition-picker）挑條件——KCT 固定清單可複選
+   toggle、自訂條件可重複加入——再到下方「建立篩選情境」彙總區（.scenario-builder）
+   設定數值並保存。選取與調整刻意以 macro whitespace 分隔，視覺上分屬兩階段。
+   全程遵 minimalist-ui：1px 實線 hairline、crisp radius、淡彩 spot accent 僅點綴。 */
+
+/* 選取區塊外殼：兩塊（KCT／自訂）共用同一基底，差異只用修飾類表達（消重，Linus）。
+   不用較強外框或頂條——讓「卡片網格」自己成為視覺主體，區塊本身保持平面。 */
+.condition-picker {
+  margin-bottom: 18px;
+  padding: 18px 20px;
   background: var(--color-surface-sunken);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
 }
 
-.quick-add__intro {
+/* 自訂區塊內含多個分組，分組間自帶間距，故略增底部留白讓最後一組不貼邊。 */
+.condition-picker--custom {
+  padding-bottom: 8px;
+}
+
+.condition-picker__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.condition-picker__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+/* 已選 N 項即時計數（僅 KCT）：淡藍 spot accent pill，與 .check-item__count 同語彙，
+   給複選 toggle 一個輕量的「已選了幾張」回饋，與標題並列。 */
+.condition-picker__count {
+  font-family: var(--font-mono);
   font-size: 12px;
+  padding: 2px 10px;
+  color: var(--pale-blue-ink);
+  background: var(--pale-blue);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.condition-picker__intro {
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.6;
   color: var(--color-muted);
 }
 
-.quick-add__group {
-  display: grid;
-  grid-template-columns: 128px 1fr;
-  align-items: start;
-  gap: 8px 14px;
+/* 自訂區塊的審計分組包裹（重複四次）：小標題在上、卡片網格在下。 */
+.condition-picker__group {
+  margin-bottom: 14px;
 }
 
-.quick-add__group-label {
-  padding-top: 6px;
+.condition-picker__group-label {
+  display: block;
+  margin-bottom: 8px;
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--color-muted);
 }
 
-.quick-add__buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+/* 卡片網格基底：等寬欄 + cell stretch ⇒ 同網格內卡片等寬等高，無需 JS 量測。
+   auto-fill + minmax(...,1fr) 讓欄數隨容器寬自適應；KCT 與自訂只是最小欄寬不同。 */
+.condition-picker__grid {
+  display: grid;
+  gap: 10px;
 }
 
-/* 窄版面時改為標題在上、按鈕在下的堆疊，避免擠壓條件鈕。 */
+/* KCT 十卡：沿用原本約 220px 級距（桌面通常 2–3 欄）。 */
+.condition-picker__grid--kct {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+/* 自訂卡內容較精簡，可略窄（180px）以容更多欄。 */
+.condition-picker__grid--custom {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+/* 窄版面：兩種網格皆降為單欄堆疊。 */
 @media (max-width: 720px) {
-  .quick-add__group {
+  .condition-picker__grid--kct,
+  .condition-picker__grid--custom {
     grid-template-columns: 1fr;
-    gap: 4px;
   }
+}
+
+/* 卡片基底（KCT 與自訂共用）：內部用 grid 排版，靠 align-items:stretch（grid cell 預設）
+   等高、靠 1fr 欄等寬。內部結構固定為 mark→(letter)→label(→note)，故已選/未選或 mark
+   內容變動都不改卡片尺寸（mark 為固定方框、letter 跨行佔位、label 撐高度）。 */
+.picker-card {
+  display: grid;
+  align-content: start;
+  gap: 4px 10px;
+  padding: 12px 14px;
+  text-align: left;
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 200ms var(--ease-soft),
+    background-color 200ms var(--ease-soft),
+    box-shadow 200ms var(--ease-soft),
+    transform 120ms var(--ease-soft);
+}
+
+.picker-card:active {
+  transform: scale(0.99);
+}
+
+.picker-card:focus-visible {
+  outline: 2px solid var(--pale-blue-ink);
+  outline-offset: 1px;
+}
+
+/* 固定方框標記格：勾選/＋/×N 都佔同一格位，未選態留白同尺寸 ⇒ 切換不致卡片跳動。 */
+.picker-card__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.picker-card__label {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+
+/* ---- KCT 卡（toggle）：grid = [mark | letter | label / note]，letter 跨兩行置中 ---- */
+.picker-card--kct {
+  grid-template-columns: 22px 26px 1fr;
+}
+
+/* 字母索引：方形 mono key（呼應 step-nav__index），跨兩行（label + note）置中於其欄。 */
+.picker-card__letter {
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pale-blue-ink);
+  background: var(--pale-blue);
+  border-radius: var(--radius-sm);
+}
+
+.picker-card--kct .picker-card__label {
+  grid-column: 3;
+}
+
+/* 停用原因標註（Phase 2 / 需科目配對未匯入）：小字 mono，置於標籤下方第二行。 */
+.picker-card__note {
+  grid-column: 3;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+
+/* 未選且未停用時的微互動：抬高一階表面 + 邊框轉強 + 極輕陰影（≤ minimalist-ui 上限）。 */
+.picker-card--kct:not(.picker-card--disabled):not(.picker-card--selected):hover {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+/* 已選態：明顯但不喧賓——淡藍底 + 較強的淡藍邊 + 已勾選的 mark，對應 aria-pressed="true"。
+   用 spot accent 表達「這張在情境裡」的語意，而非裝飾。 */
+.picker-card--selected {
+  background: var(--pale-blue);
+  border-color: var(--pale-blue-ink);
+}
+
+.picker-card--selected .picker-card__mark {
+  color: var(--pale-blue-ink);
+}
+
+/* 停用態（B = Phase 2 佔位；或需科目配對未匯入）：降透明、虛線邊、hover 不變、不可點。
+   虛線 + 半透明是「此處有東西但暫不可用」的既有語彙（呼應 .check-item__count--na）。 */
+.picker-card--disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  background: var(--color-surface);
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.picker-card--disabled:hover {
+  border-color: var(--color-border);
+  box-shadow: none;
+  transform: none;
+}
+
+.picker-card--disabled .picker-card__letter {
+  color: var(--color-muted);
+  background: var(--color-surface-sunken);
+}
+
+/* ---- 自訂卡（加入行為，無已選兩態）：grid = [mark | label] ---- */
+.picker-card--custom {
+  grid-template-columns: 22px 1fr;
+  align-items: center;
+}
+
+.picker-card--custom:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+/* ---- 建立篩選情境（彙總調整區）------------------------------------------
+   套在既有 .rule-card 上的修飾：與上方兩個選取區塊間留足夠 macro whitespace，
+   讓「選取 vs 調整」兩階段在視覺上明確分段。 */
+.scenario-builder {
+  margin-top: 28px;
+}
+
+/* ---- 分段控制（segmented）：群組組合器「全部/任一」與群組間連接器「AND/OR」共用 ----
+   一排互斥小按鈕，目前值以 .is-on（實心反白）標示。沿用 minimalist-ui：1px 實線邊、小圓角、
+   無漸層/重陰影。位置固定於群組標頭，切換不造成版面移位。 */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.segmented__btn {
+  padding: 4px 12px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: none;
+  border-left: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background-color 160ms var(--ease-soft), color 160ms var(--ease-soft);
+}
+
+.segmented__btn:first-child {
+  border-left: none;
+}
+
+.segmented__btn.is-on {
+  color: #fff;
+  background: var(--color-ink);
+}
+
+.segmented__btn:not(.is-on):hover {
+  background: var(--color-surface-sunken);
+}
+
+.segmented__btn:focus-visible {
+  outline: 2px solid var(--pale-blue-ink);
+  outline-offset: -2px;
+}
+
+/* 群組間連接器：兩個群組卡之間的置中橫列，標出「此組與上一組」是 AND 還是 OR。 */
+.group-connector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+  padding-left: 2px;
+}
+
+.group-connector__hint {
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+/* 群組組合器前後綴小字（「符合 … 以下條件」），與分段控制同列。 */
+.scenario-group__combo-label {
+  font-size: 12px;
+  color: var(--color-muted);
 }
 
 .empty-state {
@@ -1527,17 +1842,6 @@ kbd {
   color: var(--color-ink);
 }
 
-.scenario-group__order {
-  font-size: 12px;
-  color: var(--color-muted);
-}
-
-.scenario-group__join,
-.rule-row__join {
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
 .scenario-group__head .btn {
   margin-left: auto;
 }
@@ -1551,12 +1855,6 @@ kbd {
   border-top: 1px solid var(--color-border);
 }
 
-.rule-row__join--first {
-  font-size: 12px;
-  color: var(--color-muted);
-  white-space: nowrap;
-}
-
 .rule-row__controls {
   display: flex;
   flex-wrap: wrap;
@@ -1568,9 +1866,7 @@ kbd {
 
 .rule-row__controls input,
 .rule-row__controls select,
-.rule-row__type,
-.rule-row__join,
-.scenario-group__join {
+.rule-row__type {
   padding: 6px 8px;
   font-size: 13px;
   color: var(--color-text);

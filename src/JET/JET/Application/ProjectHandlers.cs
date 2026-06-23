@@ -81,7 +81,6 @@ public sealed class ProjectCreateHandler(
             PayloadReader.GetRequiredString(payload, "projectCode"),
             PayloadReader.GetRequiredString(payload, "entityName"),
             PayloadReader.GetRequiredString(payload, "operatorId"),
-            PayloadReader.GetOptionalString(payload, "industry"),
             PayloadReader.GetRequiredDate(payload, "periodStart"),
             PayloadReader.GetRequiredDate(payload, "periodEnd"),
             PayloadReader.GetOptionalDate(payload, "lastPeriodStart"),
@@ -242,7 +241,6 @@ public sealed class ProjectLoadHandler(
                 projectCode = document.ProjectCode,
                 entityName = document.EntityName,
                 operatorId = document.OperatorId,
-                industry = document.Industry,
                 periodStart = document.PeriodStart,
                 periodEnd = document.PeriodEnd,
                 lastPeriodStart = document.LastAccountingPeriodDate,
@@ -285,7 +283,7 @@ public sealed class ProjectLoadHandler(
                 {
                     rowCount = authorizedPreparerState.RowCount
                 },
-                calendar = new { holidayCount, makeupDayCount }
+                calendar = new { holidayCount, makeupDayCount, nonWorkingDays = NonWorkingDays.Resolve(document.NonWorkingDays) }
             },
             latestRuns = new
             {

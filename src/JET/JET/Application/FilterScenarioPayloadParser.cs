@@ -21,6 +21,10 @@ public static class FilterScenarioPayloadParser
         var name = ReadString(scenario, "name") ?? string.Empty;
         var rationale = ReadString(scenario, "rationale") ?? string.Empty;
 
+        // 選填來源標記（manifest scenario.source）：ReadString 已 trim 並把空白正規化為 null，
+        // 故未知/空白來源自然落為「查核員手寫」（Domain 只認得 "kct"，其餘等同 null）。
+        var source = ReadString(scenario, "source");
+
         var groups = new List<FilterGroupSpec>();
         if (scenario.TryGetProperty("groups", out var groupsElement)
             && groupsElement.ValueKind == JsonValueKind.Array)
@@ -31,7 +35,7 @@ public static class FilterScenarioPayloadParser
             }
         }
 
-        return new FilterScenarioSpec(name.Trim(), rationale.Trim(), groups);
+        return new FilterScenarioSpec(name.Trim(), rationale.Trim(), groups, source);
     }
 
     private static FilterGroupSpec ParseGroup(JsonElement group, int moneyScale)
@@ -62,11 +66,17 @@ public static class FilterScenarioPayloadParser
             "drCrOnly" => FilterRuleType.DrCrOnly,
             "manualAuto" => FilterRuleType.ManualAuto,
             "accountPair" => FilterRuleType.AccountPair,
+            "specialAccountCategoryPair" => FilterRuleType.SpecialAccountCategoryPair,
             "periodInOut" => FilterRuleType.PeriodInOut,
             "customKeywords" => FilterRuleType.CustomKeywords,
             "customTrailingZeros" => FilterRuleType.CustomTrailingZeros,
             "customPreparerEntryCount" => FilterRuleType.CustomPreparerEntryCount,
             "customAccountEntryCount" => FilterRuleType.CustomAccountEntryCount,
+            "revenueDebitNearQuarterEnd" => FilterRuleType.RevenueDebitNearQuarterEnd,
+            "revenueWithoutNormalCounterpart" => FilterRuleType.RevenueWithoutNormalCounterpart,
+            "manualRevenueEntry" => FilterRuleType.ManualRevenueEntry,
+            "trailingDigits" => FilterRuleType.TrailingDigits,
+            "preparerEqualsApprover" => FilterRuleType.PreparerEqualsApprover,
             _ => throw Invalid($"不支援的條件型別「{typeName}」。")
         };
 
@@ -117,7 +127,8 @@ public static class FilterScenarioPayloadParser
             CreditCategory: ReadString(rule, "creditCategory"),
             InPeriod: ParseBool(rule, "inPeriod"),
             Digits: ParseInt(rule, "digits"),
-            MaxEntries: ParseInt(rule, "maxEntries"));
+            MaxEntries: ParseInt(rule, "maxEntries"),
+            WindowDays: ParseInt(rule, "windowDays"));
     }
 
     private static bool? ParseBool(JsonElement rule, string name)

@@ -56,7 +56,6 @@
           '（如 Q1–Q4 季別工作表、逐月 CSV）。檔案由後端串流匯入專案資料庫，前端不解析資料。</p>' +
         datasetCard('gl', 'GL（總帳明細）', state.importState.gl) +
         datasetCard('tb', 'TB（試算表）', state.importState.tb) +
-        accountMappingCard(state.importState.accountMapping) +
         authorizedPreparerCard(state.importState.authorizedPreparer) +
         calendarCard(calendar) +
         '<div class="panel__actions">' + Ui.MOCK_BUTTON_HTML + '</div>' +
@@ -65,72 +64,10 @@
 
     bindDatasetCard(container, 'gl', 'GL');
     bindDatasetCard(container, 'tb', 'TB');
-    bindAccountMappingCard(container);
     bindAuthorizedPreparerCard(container);
     bindCalendarCard(container);
     Ui.bindMockButton(container, 'import');
     Ui.bindStepFooter(container);
-  }
-
-  // 科目配對：格式固定三欄（科目代號、科目名稱、標準化分類），匯入即生效、整份替換；
-  // 解鎖「未預期借貸組合」預篩選與「科目配對分析」篩選條件。
-  function accountMappingCard(info) {
-    var body = info
-      ? '<p class="import-card__status import-card__status--ok">已匯入 ' + info.rowCount + ' 個科目（' +
-          Ui.esc(info.fileName) + '）。</p>'
-      : '<p class="import-card__status">尚未匯入。匯入後可執行「未預期出現之特定借貸組合」與科目配對分析。</p>';
-
-    return (
-      '<section class="import-card" data-bind="import-card-account-mapping">' +
-        '<h3 class="import-card__title">科目配對（科目 → 標準化分類）</h3>' +
-        body +
-        '<div class="import-card__actions">' +
-          '<button type="button" class="btn' + (info ? ' btn--ghost' : '') +
-            '" data-action="import-account-mapping">' +
-            (info ? '重新匯入科目配對檔' : '選擇科目配對檔') + '</button>' +
-          (info
-            ? '<button type="button" class="btn btn--ghost" data-action="preview-account-mapping"' +
-                ' title="開啟資料預覽，檢視已匯入的科目配對前 50 筆">預覽科目配對</button>'
-            : '') +
-        '</div>' +
-      '</section>'
-    );
-  }
-
-  function bindAccountMappingCard(container) {
-    // 預覽入口：沿用全域資料預覽面板（與配對步驟的「預覽標準化資料」同機制），看前 50 筆科目配對。
-    var previewBtn = container.querySelector('[data-action="preview-account-mapping"]');
-    if (previewBtn && Ui.openDataPreview) {
-      previewBtn.addEventListener('click', function () {
-        Ui.openDataPreview('accountMappings');
-      });
-    }
-
-    var btn = container.querySelector('[data-action="import-account-mapping"]');
-    if (!btn) { return; }
-
-    btn.addEventListener('click', function () {
-      Ui.run('匯入科目配對', function () {
-        return global.JetApi.hostSelectFile({
-          title: '選擇科目配對檔（科目代號、科目名稱、標準化分類）',
-          extensions: ['.xlsx', '.csv']
-        }).then(function (file) {
-          if (!file.filePath) { return; }
-          return global.JetApi.importAccountMappingFromFile({
-            filePath: file.filePath,
-            fileName: file.fileName
-          }).then(function (data) {
-            Store.setAccountMappingState({
-              batchId: data.batchId,
-              rowCount: data.rowCount,
-              fileName: data.fileName,
-              importedUtc: data.importedUtc
-            });
-            Store.addMessage('科目配對匯入完成：' + data.rowCount + ' 個科目。', 'info');
-          });
-        });
-      });
-    });
   }
 
   // 授權編製人員清單：單欄姓名 .xlsx，匯入即整份替換、生效。
@@ -196,7 +133,7 @@
     });
   }
 
-  // 日期維度：上傳事務所假日／補班 .xlsx（標頭第 2 列，後端解析；前端零邏輯）。
+  // 日期維度：上傳事務所假日／補班 .xlsx + 設定每週非工作日（週末判定）。前端零邏輯，權威在後端。
   function calendarCard(calendar) {
     var hasAny = calendar && (calendar.holidayCount || calendar.makeupDayCount);
     var body = hasAny
@@ -212,8 +149,30 @@
           '<button type="button" class="btn btn--ghost" data-action="import-holiday">上傳假日檔</button>' +
           '<button type="button" class="btn btn--ghost" data-action="import-makeup">上傳補班檔</button>' +
         '</div>' +
+        '<div class="calendar-nonworking">' +
+          '<span class="calendar-nonworking__label">非工作日（週末判定）</span>' +
+          '<div class="calendar-nonworking__days" data-bind="nonworking-days">' +
+            weekdayCheckboxesHtml(calendar && calendar.nonWorkingDays) +
+          '</div>' +
+          '<p class="calendar-nonworking__hint">未調整時預設週六、週日。影響週末過帳／核准規則與週末篩選條件。</p>' +
+        '</div>' +
       '</section>'
     );
+  }
+
+  // 一週七天的非工作日勾選；canonical .NET DayOfWeek（週日=0…週六=6），UI 以週一→週日排列。
+  function weekdayCheckboxesHtml(nonWorkingDays) {
+    var set = nonWorkingDays || [0, 6];
+    var days = [
+      { v: 1, label: '一' }, { v: 2, label: '二' }, { v: 3, label: '三' },
+      { v: 4, label: '四' }, { v: 5, label: '五' }, { v: 6, label: '六' }, { v: 0, label: '日' }
+    ];
+    return days.map(function (d) {
+      var checked = set.indexOf(d.v) >= 0 ? ' checked' : '';
+      return '<label class="weekday-toggle">' +
+        '<input type="checkbox" data-weekday="' + d.v + '"' + checked + '>' +
+        '<span>' + d.label + '</span></label>';
+    }).join('');
   }
 
   function bindCalendarCard(container) {
@@ -233,7 +192,8 @@
               var existing = Store.getState().importState.calendar || {};
               Store.setCalendarState({
                 holidayCount: data.count,
-                makeupDayCount: existing.makeupDayCount || 0
+                makeupDayCount: existing.makeupDayCount || 0,
+                nonWorkingDays: existing.nonWorkingDays
               });
               Store.addMessage('假日匯入完成：' + data.count + ' 天。', 'info');
             });
@@ -258,7 +218,8 @@
               var existing = Store.getState().importState.calendar || {};
               Store.setCalendarState({
                 holidayCount: existing.holidayCount || 0,
-                makeupDayCount: data.count
+                makeupDayCount: data.count,
+                nonWorkingDays: existing.nonWorkingDays
               });
               Store.addMessage('補班匯入完成：' + data.count + ' 天。', 'info');
             });
@@ -266,6 +227,27 @@
         });
       });
     }
+
+    // 非工作日（週幾）勾選：任一變更即蒐集勾選的 canonical 值送後端，回傳後更新狀態。
+    container.querySelectorAll('[data-bind="nonworking-days"] input[data-weekday]').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var days = [];
+        container.querySelectorAll('[data-bind="nonworking-days"] input[data-weekday]').forEach(function (b) {
+          if (b.checked) { days.push(Number(b.getAttribute('data-weekday'))); }
+        });
+        Ui.run('設定非工作日', function () {
+          return global.JetApi.calendarSetNonWorkingDays({ days: days }).then(function (data) {
+            var existing = Store.getState().importState.calendar || {};
+            Store.setCalendarState({
+              holidayCount: existing.holidayCount || 0,
+              makeupDayCount: existing.makeupDayCount || 0,
+              nonWorkingDays: data.nonWorkingDays
+            });
+            Store.addMessage('已更新非工作日設定。', 'info');
+          });
+        });
+      });
+    });
   }
 
   // 卡片三狀態互斥：工作區啟動時不渲染摘要與入口鈕 → 永不三鈕同框。

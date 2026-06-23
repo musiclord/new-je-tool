@@ -11,7 +11,6 @@ public sealed class JsonFileProjectStoreTests
         "ENG-2024-001",
         "範例股份有限公司",
         "auditor01",
-        "manufacturing",
         "2024-01-01",
         "2024-12-31",
         "2024-12-31",

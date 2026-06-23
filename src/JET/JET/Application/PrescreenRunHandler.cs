@@ -61,7 +61,8 @@ public sealed class PrescreenRunHandler(
                 hasHolidays,
                 RunUnexpectedAccountPair: unexpectedPairNaReason is null,
                 HasAuthorizedPreparers: hasAuthorizedPreparers,
-                document.MoneyScale),
+                document.MoneyScale,
+                document.NonWorkingDays),
             cancellationToken);
 
         var runId = Guid.NewGuid().ToString("N");

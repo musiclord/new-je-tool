@@ -23,6 +23,12 @@ public sealed class SqliteDataPreviewRepository(JetProjectDatabase database) : I
 
     private static readonly string[] AuthorizedPreparerColumns = ["preparerName"];
 
+    private static readonly string[] DateDimensionColumns = ["date", "dayType", "dayName"];
+
+    /// <summary>結構總覽固定欄位（rows 由 <see cref="JetSchemaCatalog"/> 驅動，非資料表列）。</summary>
+    private static readonly string[] SchemaOverviewColumns =
+        ["canonicalName", "physicalName", "layer", "audience", "browsable"];
+
     public async Task<DataPreviewResult> GetPreviewAsync(
         string projectId,
         DataPreviewDataset dataset,
@@ -30,6 +36,12 @@ public sealed class SqliteDataPreviewRepository(JetProjectDatabase database) : I
         int limit,
         CancellationToken cancellationToken)
     {
+        // schemaOverview 由 catalog metadata 驅動，不需資料庫——提早回，避免無謂連線。
+        if (dataset == DataPreviewDataset.SchemaOverview)
+        {
+            return SchemaOverviewPreview();
+        }
+
         await database.EnsureCreatedAsync(projectId, cancellationToken);
 
         await using var connection = database.CreateConnection(projectId);
@@ -43,8 +55,58 @@ public sealed class SqliteDataPreviewRepository(JetProjectDatabase database) : I
             DataPreviewDataset.TbBalances => await TbBalancesPreviewAsync(connection, moneyScale, limit, cancellationToken),
             DataPreviewDataset.AccountMappings => await AccountMappingsPreviewAsync(connection, limit, cancellationToken),
             DataPreviewDataset.AuthorizedPreparers => await AuthorizedPreparersPreviewAsync(connection, limit, cancellationToken),
+            DataPreviewDataset.DateDimension => await DateDimensionPreviewAsync(connection, limit, cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(dataset), dataset, null)
         };
+    }
+
+    /// <summary>
+    /// 資料庫結構總覽：rows 來自 <see cref="JetSchemaCatalog"/>（DataView + StructureOnly，Hidden 不列），
+    /// 非任何資料表的列資料。一份 catalog 驅動成列——不在此硬列每張表（消滅 special case）。
+    /// </summary>
+    private static DataPreviewResult SchemaOverviewPreview() =>
+        DataPreviewSchemaOverview.Build(SchemaOverviewColumns);
+
+    /// <summary>已匯入的事務所假日／補班日（依日期升冪；無統計）。</summary>
+    private static async Task<DataPreviewResult> DateDimensionPreviewAsync(
+        SqliteConnection connection,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        long totalCount;
+        await using (var count = connection.CreateCommand())
+        {
+            count.CommandText = "SELECT COUNT(*) FROM staging_calendar_raw_day;";
+            totalCount = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
+        }
+
+        if (totalCount == 0)
+        {
+            return new DataPreviewResult([], [], 0, null);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"""
+            SELECT date, day_type, day_name
+            FROM staging_calendar_raw_day
+            ORDER BY date
+            LIMIT {limit};
+            """;
+
+        var rows = new List<IReadOnlyList<string?>>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            rows.Add(
+            [
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2)
+            ]);
+        }
+
+        return new DataPreviewResult(DateDimensionColumns, rows, totalCount, null);
     }
 
     /// <summary>已匯入的科目配對表（依科目代號排序；無統計）。</summary>

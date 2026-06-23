@@ -178,6 +178,35 @@ public static class PayloadReader
         return values;
     }
 
+    /// <summary>讀取整數陣列(必填)。非陣列或含非整數元素 → invalid_payload。</summary>
+    public static List<int> GetIntList(JsonElement payload, string name)
+    {
+        if (payload.ValueKind != JsonValueKind.Object
+            || !payload.TryGetProperty(name, out var property)
+            || property.ValueKind != JsonValueKind.Array)
+        {
+            throw new JetActionException(
+                JetErrorCodes.InvalidPayload,
+                $"payload 缺少必填陣列欄位 '{name}'。");
+        }
+
+        var values = new List<int>();
+
+        foreach (var item in property.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Number || !item.TryGetInt32(out var number))
+            {
+                throw new JetActionException(
+                    JetErrorCodes.InvalidPayload,
+                    $"欄位 '{name}' 必須是整數陣列。");
+            }
+
+            values.Add(number);
+        }
+
+        return values;
+    }
+
     public static List<string>? GetOptionalStringList(JsonElement payload, string name)
     {
         if (payload.ValueKind != JsonValueKind.Object

@@ -114,7 +114,6 @@ public sealed class JsonStorageReadabilityTests
             "DEMO-2025-001",
             "德謨股份有限公司",
             "dev-tester",
-            null,
             "2025-01-01", "2025-12-31", null,
             ProjectDocument.DefaultMoneyScale,
             ProjectDocument.DefaultRoundingMode,

@@ -79,7 +79,6 @@ public sealed class DemoHandlersTests
             projectCode = project.GetProperty("projectCode").GetString(),
             entityName = project.GetProperty("entityName").GetString(),
             operatorId = project.GetProperty("operatorId").GetString(),
-            industry = project.GetProperty("industry").GetString(),
             periodStart = project.GetProperty("periodStart").GetString(),
             periodEnd = project.GetProperty("periodEnd").GetString(),
             lastPeriodStart = project.GetProperty("lastPeriodStart").GetString()

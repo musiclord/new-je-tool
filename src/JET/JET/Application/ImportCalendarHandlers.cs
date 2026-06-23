@@ -158,3 +158,28 @@ public sealed class ImportMakeupDayFromFileHandler(
 
     protected override CalendarDayType DayType => CalendarDayType.Makeup;
 }
+
+/// <summary>
+/// calendar.setNonWorkingDays:設定每案「非工作日是週幾」(.NET DayOfWeek 編碼,週日=0…週六=6),
+/// 預設週六、週日。寫入 project.json;影響週末過帳/核准規則與週末篩選條件。
+/// Payload `{ days: [int, …] }`;值需在 0–6,否則 invalid_payload。
+/// </summary>
+public sealed class CalendarSetNonWorkingDaysHandler(
+    IProjectStore projectStore,
+    IProjectSession session) : IApplicationActionHandler
+{
+    public string Action => "calendar.setNonWorkingDays";
+
+    public async Task<object?> HandleAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var projectId = session.RequireProjectId();
+        var normalized = NonWorkingDays.Validate(PayloadReader.GetIntList(payload, "days"));
+
+        var document = await projectStore.FindAsync(projectId, cancellationToken)
+            ?? throw new JetActionException(JetErrorCodes.ProjectNotFound, $"找不到專案 '{projectId}'。");
+
+        await projectStore.SaveAsync(document with { NonWorkingDays = normalized }, cancellationToken);
+
+        return new { ok = true, nonWorkingDays = normalized };
+    }
+}

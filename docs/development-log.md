@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-06-23 (r3) — Step 4 進階篩選查詢建構器 UX 重整（Approach B：分組組合器）
+
+承前一輪 Step 4 前端重設計的使用者回報（介面移位、自訂卡 ×N 徽章莫名變動、KCT 命名要求、查詢建構器要現代化）。本輪先依 superpowers brainstorming 流程提設計、經使用者核准 **Approach B** 後，由單一作者一致實作——上一輪把高度耦合的設計拆給多個無共享上下文的 subagent，正是不一致與低品質的根因，故本輪不 fan-out。純前端，無後端/契約變更（設計提案 `docs/specs/2026-06-23-filter-query-builder-ux-redesign-design.md`）。
+
+- **介面移位修復**：移除彙總卡的「建議名稱」chip 整列——它是條件式才出現、寬度又隨內容變動的一列，正是把下方欄位往下推的移位來源；連同 `.scenario-suggest*` CSS 一併清除。
+- **自訂卡 ×N 徽章移除**：自訂條件卡回到單純「點一下＝加入一條」，靜態「＋」示意、不再顯示同型別計數（上一輪擅自加的 ×N 語意不明）。
+- **KCT 多選命名（使用者指定）**：勾選 KCT 卡後，情境名稱自動帶入所選字母以 `+` 串接（依 A→J 排序，如 `E+F+G`）、動機帶入各條 KCT 條件的詳細說明（字母＋清單 label 逐行）；KCT 全取消則清空兩欄交回手動。
+- **查詢建構器 Approach B（現代化分組組合器）**：每個條件群組標頭一個分段組合器「符合 **全部**(AND)／**任一**(OR)」，取代舊版逐條 AND/OR；群組之間以 AND/OR 連接器串接（對應兩層 AST：群組內各規則 join 一致＝組合器、群組間 `group.join`）。條件列只剩型別/欄位/數值。新條件併入最後一組（自訂建立的群組預設「全部」、KCT 建立的預設「任一」——多紅旗命中任一即算、避免 AND 幾乎零命中；KCT 非營業日 I 自成「任一」群組）。wire 仍 `{name, rationale, groups}`，`__kctLetter` UI-only 標記由 `toWireScenario` 深拷貝剝除。
+- **檔案**：`wwwroot/js/steps/filter-step.js`、`wwwroot/css/app.css`（移除 `.scenario-suggest*`/`.scenario-group__order`/`.rule-row__join*` 死碼、新增 `.segmented*`/`.group-connector*`）；`docs/jet-frontend-description.md` §10 同步。純前端、無 `.cs` 變更，C# build/test 不受影響。
+- **驗證**：開發環境無 node，無法自動語法檢查 JS；以逐區段精讀＋class 一致性 grep 核對（JS 發出的 picker/segmented/group-connector 類皆有對應 CSS、死碼 0 殘留）。**GUI 目視驗收待 Windows 端**（`windows-handoff.md` 新卡，取代 r2 卡第 2 點的 KCT 單條取代行為）。未 commit（版控待使用者驗收後決定）。
+
+## 2026-06-23 (r2) — UX 修正七題 + 資料表三層正規化(設計提案 `docs/specs/2026-06-23-jet-ux-and-schema-canonicalization-design.md`)
+
+承 Phase 1 後使用者回報的七項分散問題,本輪逐一修正,主軸對齊「以審計員為出發點」。執行方式是多代理 SDD 迴圈:每個 workstream 先寫 plan(Global Constraints 原樣帶下、每個 task 各自宣告 Interfaces 的 Consumes/Produces);每個 task 派一個全新的 subagent,交給它四件套——任務全文、約束、scene、以及 Linus/Karpathy/Ousterhout 的 taste primer。改完後預烘焙一份 review-package(以 `git write-tree` 做 tree 隔離、全程不落 commit),交給單一的合併 reviewer 從 spec、code、taste 三個面向審。Critical 與 Important 問題派 fix subagent 複審到 approved,Minor 問題進 ledger 留待後續。全部 task 最終都經複審 APPROVED。
+
+- **#1 命名誤譯**:「JET 傳票測試工具」→「分錄測試自動化工具」(傳票=voucher 為誤譯,分錄=journal entry;Form1 標題 + index.html title/header)。
+- **#5 建立案件精簡**:整條移除「產業別」(前端表單/摘要/payload + `ProjectDocument.Industry` + handler + demo 工廠/DTO + manifest + frontend-description + 8 處測試 fixture);摘要移除「金額 scale」顯示(`moneyScale` 後端概念保留)。
+- **#4 非工作日週幾選擇器(使用者裁定:預設週六日)**:新增 Domain `NonWorkingDays`(canonical .NET DayOfWeek 0–6,null→預設 `[0,6]`、顯式空集合=整週工作日);`ISqlDialect.WeekendPredicate` 由寫死週末**參數化**為讀設定——**預設 `[0,6]` 完全重現舊 SQL**(SQLite `IN ('0','6')`、SQL Server `(d+6)%7→IN (5,6)`),故既有週末/預篩選/篩選測試全數不變通過(golden-master);`ProjectDocument`/`FilterRuleContext`/`PrescreenRunInput` 加可選欄位;新 action `calendar.setNonWorkingDays`(寫 project.json)+ `project.load` 回 `nonWorkingDays`;前端日期維度卡七天勾選 + on-brand CSS。
+- **#2 KCT 獨立 A–J 面板 + 豁免情境名稱/動機**:Step 4 頂部改為**顯著獨立**的「KCT 小組條件」面板(A–J 十顆,B disabled 標 Phase 2;由一份 `FILTER_KCT_CHECKLIST` 資料驅動),從「快速加入」抽出成單一入口。後端新增 filter 情境 wire 欄 `source:"kct"`(`FilterScenarioSpec.Source` + `FilterScenarioSources` 常數 + 驗證豁免 name/rationale + commit 時補非空預設保 NOT NULL 留痕),前端 KCT 來源情境 `scenarioGate` 豁免必填(非 KCT 行為逐字不變)。**權威判定在後端**(前端 source 只是標記、gate 豁免只是不阻擋)。
+- **#3b 進階篩選新增「考量特殊科目類別配對」條件**:新 `FilterRuleType.SpecialAccountCategoryPair` + `SpecialAccountCategoryPairModes`(drAndCr/drNotCr/notDrCr),重用 `DebitCategory`(A)/`CreditCategory`(B)/`PairMode`;三模式以 EXISTS/NOT EXISTS(否定模式)組合,把既有 `AccountPair` 的四個 side closure **抽成共用 `CategorySides`**(AccountPair SQL 逐字不變,雙 provider parity 測試實證);前端三模式 + 借/貸類別控制項。`drAndCr` 與 AccountPair `exact` SQL 重疊但屬不同條件,刻意並存(顯式 tradeoff)。
+- **#3a 科目配對序位(使用者裁定:驗證跑過即解鎖)**:把科目配對匯入卡從 Step 1 搬到 Step 3「資料驗證與測試」**驗證卡與預篩選卡之間**(方法論順序 完整性→配對→篩選,且 prescreen 的 unexpectedAccountPair 需配對先到位);**解鎖門檻 = `state.lastRuns.validate` 存在(驗證已執行)**,完整性差異不擋(避免不重大差異卡住下游);狀態/resume/預覽不變,純前端版面、無 wire/state 形狀變更。
+- **#7+#6 中央三層表名登錄 + 資料預覽正規目錄(使用者裁定:不實體改名)**:調查發現現行表名散在 **341 處 inline SQL/73 檔**;權衡後使用者選「中央三層登錄 + 呈現層正規名」而非實體改名——**不動 341 處、無 migration、零審計邏輯風險**。新增 Domain `JetSchemaCatalog`(唯一事實來源:19 張實體表 → 正規審計名 + 三層 Source/Staging/Target/System + audience DataView/StructureOnly/Hidden,宣告式 + 漂移守門測試對 sqlite_master 核對覆蓋);資料預覽改用正規名(JE_PBC/TB_PBC/JE/TB/ACCOUNT_MAPPING/AUTHORIZED_PREPARER)+ 新增 DATE_DIMENSION 檢視 + 「資料庫結構總覽」檢視(catalog 驅動成列、排除 Hidden,滿足「看到基本上所有表 + 專案 schema」);既有 6 dataset 查詢 SQL 語意逐字不變。guide 補三層結構段。
+- **驗證**:每個 workstream build 0 警告 0 錯誤、全套件回歸綠;最終全套件 **1087 綠**(0 failed/0 skipped,SQLite + SQL Server LocalDB parity 實跑;起點 993 → +94 新測試)。新測試覆蓋:`NonWorkingDays` Resolve/Validate BVA + `SqlDialect` 週末決策表(預設/中東週五六/空集合 × 雙 provider)+ `calendar.setNonWorkingDays` 契約;`FilterScenarioValidator` source×name×rationale 決策表 + 特殊配對 {mapping×借×貸×mode} 決策表 + `SpecialAccountCategoryPairPredicateTests` 固定 fixture 三模式命中身分;`JetSchemaCatalog` 一致性 + 漂移守門;資料預覽 DATE_DIMENSION 命中身分 + 結構總覽排除 Hidden + 契約。**程式完成、自動化全綠,GUI 目視驗收待人工**(`windows-handoff.md` 一輪卡)。**未實體改名任何資料表;未 commit**(版控待使用者驗收後決定)。KCT **B** 仍 Phase 2(待 BS/IS 分類維度)。
+
+## 2026-06-23 — KCT 小組進階篩選條件 Phase 1(A/C/D/H/J 新型別 + E/F/G/I 預設;B 緩做)
+
+KCT 小組提供十條方法學篩選清單,要在 Step 4「進階條件篩選」以**獨立分組**呈現。先出設計提案(`docs/specs/2026-06-23-kct-advanced-filter-conditions-design.md`,經使用者核准),本輪實作 Phase 1 的九條。沿用既有 `filter.preview`／`filter.commit` 契約,**不新增 action**——只擴充條件 AST 型別與述詞。
+
+- **五個新 filter type(述詞純讀既有表,參數化集合式 SQL)**:`revenueDebitNearQuarterEnd`(A,季末前 X 天借記收入:科目=Revenue 且借方側 ∧ `post_date` 落在曆年季底前 X 天視窗;視窗由 Domain 純函式 `QuarterEndWindows` 自查核期間＋X 枚舉、邊界參數綁定;`windowDays` 1–92)、`revenueWithoutNormalCounterpart`(C,Revenue 貸方但同傳票無 Receivables／Receipt in advance 借方——`unexpectedAccountPair` 的否定面,**不含 Cash** 為一般對方科目)、`manualRevenueEntry`(D,Revenue ∧ `is_manual=1`)、`trailingDigits`(H,顯示金額主單位整數尾數比對,樣態重用 `keywords` 欄、每組 1–12 位純數字;整數 ÷／% 雙 provider 等價)、`preparerEqualsApprover`(J,`created_by=approved_by` 皆非空)。A／C／D 需科目配對已匯入(validator 閘控,鏡射 accountPair)。`FilterRuleSpec` 加 `WindowDays` 欄位(僅 A 用)。
+- **四條重用既有型別的 KCT 預設(E／F／G／I)**:前端「KCT 小組條件」分組的預設按鈕帶入既有型別預填規則——特定人員→`text(createBy,exact)`、特定摘要→`customKeywords`、空白摘要→`prescreen blankDescription`、非營業日→一個群組 `prescreen weekendPosting OR holidayPosting`。不新增 wire 型別(相同述詞不重造,單一事實在後端)。
+- **前端**:`FILTER_RULE_GROUPS` 第五組 `kct`「KCT 小組條件」(獨立於既有四組);五個新型別控制項與摘要;`FILTER_KCT_PRESETS` + 預設帶入。純呈現、零商業邏輯。
+- **關鍵決策(使用者裁定 2026-06-23)**:C 不含 Cash;I 僅比對過帳日;H 主單位整數尾數(捨小數);A 曆年四季(3/31、6/30、9/30、12/31)、比對過帳日、X 由查核員輸入;E／F／G／I 採預設帶入既有型別。**B(借固定資產貸費用)緩做**——需新增獨立 BS/IS 科目分類維度(承載:獨立匯入;字彙待 KCT 交付完整 BS·IS 分類清單),列 **Phase 2**。
+- **驗證**:build 0 警告 0 錯誤;全套件 **993 綠**(0 failed／0 skipped,SQLite + SQL Server LocalDB parity 實跑)。新測試:Domain `QuarterEndWindowsTests`(手算視窗清單,BVA／跨年／交集)、`FilterScenarioValidatorTests` 補五型別(A 閘控+`windowDays` BVA、C／D 閘控決策表、H 樣態決策表、J 無參數合法);Infrastructure `KctFilterPredicateTests`(固定 7 傳票 fixture,五述詞**命中傳票身分**斷言,含 A 視窗 X=1／2／3 邊界、C 排除應收/預收借、H 999999／000000、J 同名命中);Application `FilterHandlersTests` 補 wire(H inline 端到端、三無參型別端到端不丟例外、A 閘控/`windowDays`/H 非數字 → `invalid_scenario`)。述詞純 ANSI(EXISTS／NOT EXISTS／整數 ÷%／TRIM／UPPER／ISO 日期),SQL Server 等價由構造保證,與既有 filter-only 述詞同姿態(`GlRuleSqlEquivalenceTests` 為 SQLite identity oracle、無 SqlServer 子類)。**程式已完成、自動化測試全綠,但 GUI 目視驗收與提交都還沒做**(`windows-handoff.md` 任務卡)。B + BS/IS 維度為 Phase 2,待 KCT 分類清單到位另起。
+
 ## 2026-06-23 — 空值測試「日期區間外」改以核准日判定(對齊舊工具)＋ 控制總數/空欄防呆稽核修正
 
 承 2026-06-22 三顧端到端稽核(JET vs 舊 IDEA 工具)發現的三件事,本輪修正並以同一份指令重跑稽核驗證:

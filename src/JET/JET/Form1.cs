@@ -39,7 +39,7 @@ namespace JET
         /// </summary>
         private void ConfigureWindowChrome()
         {
-            Text = "JET 傳票測試工具";
+            Text = "分錄測試自動化工具";
 
             var workArea = Screen.PrimaryScreen?.WorkingArea
                 ?? new Rectangle(0, 0, 1280, 800);

@@ -61,7 +61,6 @@ public sealed class ProviderRoutingGlRepositoryTests
         ProjectCode: "C",
         EntityName: "E",
         OperatorId: "o",
-        Industry: null,
         PeriodStart: "2025-01-01",
         PeriodEnd: "2025-12-31",
         LastAccountingPeriodDate: null,

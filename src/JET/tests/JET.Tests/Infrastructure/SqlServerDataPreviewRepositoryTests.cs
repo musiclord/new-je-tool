@@ -130,6 +130,59 @@ public sealed class SqlServerDataPreviewRepositoryTests
     }
 
     [SqlServerFact]
+    public async Task GetPreviewAsync_DateDimension_ReturnsImportedDaysSortedByDate()
+    {
+        await using var project = await TempSqlServerProject.TryCreateAsync();
+        Assert.NotNull(project);
+        await SeedPreviewDataAsync(project.Database, project.ProjectId);
+        var repository = new SqlServerDataPreviewRepository(project.Database);
+
+        var result = await repository.GetPreviewAsync(
+            project.ProjectId,
+            DataPreviewDataset.DateDimension,
+            moneyScale: 10_000,
+            limit: 50,
+            CancellationToken.None);
+
+        Assert.Equal(["date", "dayType", "dayName"], result.Columns);
+        Assert.Equal(3, result.TotalCount);
+        Assert.Null(result.Stats);
+
+        // 依 date 升冪、逐列身分（缺名 → null）。
+        Assert.Equal(["2025-01-01", "holiday", null], result.Rows[0]);
+        Assert.Equal(["2025-02-08", "makeup", "補班"], result.Rows[1]);
+        Assert.Equal(["2025-10-10", "holiday", "國慶日"], result.Rows[2]);
+    }
+
+    [SqlServerFact]
+    public async Task GetPreviewAsync_SchemaOverview_ListsCatalogExposedEntriesExcludingHidden()
+    {
+        await using var project = await TempSqlServerProject.TryCreateAsync();
+        Assert.NotNull(project);
+        var repository = new SqlServerDataPreviewRepository(project.Database);
+
+        var result = await repository.GetPreviewAsync(
+            project.ProjectId,
+            DataPreviewDataset.SchemaOverview,
+            moneyScale: 10_000,
+            limit: 50,
+            CancellationToken.None);
+
+        Assert.Equal(["canonicalName", "physicalName", "layer", "audience", "browsable"], result.Columns);
+
+        var expectedCanonical = JetSchemaCatalog.All
+            .Where(e => e.Audience is SchemaAudience.DataView or SchemaAudience.StructureOnly)
+            .Select(e => (string?)e.CanonicalName)
+            .ToList();
+
+        var actualCanonical = result.Rows.Select(r => r[0]).ToList();
+        Assert.Equal(expectedCanonical, actualCanonical);
+        Assert.Equal(expectedCanonical.Count, result.TotalCount);
+        Assert.DoesNotContain("GL_CONTROL_TOTAL", actualCanonical);
+        Assert.DoesNotContain("APP_MESSAGE_LOG", actualCanonical);
+    }
+
+    [SqlServerFact]
     public async Task GetPreviewAsync_UnknownDataset_ThrowsArgumentOutOfRangeException()
     {
         await using var project = await TempSqlServerProject.TryCreateAsync();
@@ -184,6 +237,12 @@ public sealed class SqlServerDataPreviewRepositoryTests
             VALUES
                 ('mapping-target', 2, '1101', N'現金', 'Cash'),
                 ('mapping-target', 3, '4101', N'銷貨收入', 'Revenue');
+
+            INSERT INTO staging_calendar_raw_day (day_type, date, day_name)
+            VALUES
+                ('holiday', '2025-10-10', N'國慶日'),
+                ('holiday', '2025-01-01', NULL),
+                ('makeup', '2025-02-08', N'補班');
             """);
     }
 

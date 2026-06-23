@@ -197,6 +197,7 @@ public static class AppCompositionRoot
             new ImportMakeupDayHandler(calendarStore, session),
             new ImportHolidayFromFileHandler(fileReader, calendarStore, session),
             new ImportMakeupDayFromFileHandler(fileReader, calendarStore, session),
+            new CalendarSetNonWorkingDaysHandler(projectStore, session),
             new MappingAutoSuggestHandler(),
             new MappingCommitGlHandler(importRepository, glRepository, mappingStore, projectStore, session),
             new MappingCommitTbHandler(importRepository, tbRepository, mappingStore, projectStore, session),

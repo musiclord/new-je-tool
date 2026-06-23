@@ -15,7 +15,6 @@ public sealed class ProjectHandlersTests
           "projectCode": "ENG-2024-001",
           "entityName": "範例股份有限公司",
           "operatorId": "auditor01",
-          "industry": "manufacturing",
           "periodStart": "2024-01-01",
           "periodEnd": "2024-12-31",
           "lastPeriodStart": "2024-12-31"
@@ -220,7 +219,6 @@ public sealed class ProjectHandlersTests
               "projectCode": "LEGACY-001",
               "entityName": "舊版專案",
               "operatorId": "op",
-              "industry": null,
               "periodStart": "2025-01-01",
               "periodEnd": "2025-12-31",
               "lastAccountingPeriodDate": null,

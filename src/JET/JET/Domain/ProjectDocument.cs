@@ -11,7 +11,6 @@ public sealed record ProjectDocument(
     string ProjectCode,
     string EntityName,
     string OperatorId,
-    string? Industry,
     string PeriodStart,
     string PeriodEnd,
     string? LastAccountingPeriodDate,
@@ -22,7 +21,8 @@ public sealed record ProjectDocument(
     int SchemaVersion,
     string DatabaseProvider = ProjectDocument.DefaultDatabaseProvider,
     bool RocDateEnabled = true,
-    DateTimeOffset? LastOpenedUtc = null)
+    DateTimeOffset? LastOpenedUtc = null,
+    IReadOnlyList<int>? NonWorkingDays = null)
 {
     public const int DefaultMoneyScale = 10_000;
     public const string DefaultRoundingMode = "AwayFromZero";

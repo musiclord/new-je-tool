@@ -78,6 +78,11 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
             case FilterRuleType.AccountPair:
                 return predicates.AccountPair(command, rule.PairMode!, rule.DebitCategory, rule.CreditCategory);
 
+            case FilterRuleType.SpecialAccountCategoryPair:
+                // 考量特殊科目類別配對：顯式雙類別 + 否定（drAndCr/drNotCr/notDrCr，否定走述詞內 NOT EXISTS）。
+                return predicates.SpecialAccountCategoryPair(
+                    command, rule.PairMode!, rule.DebitCategory, rule.CreditCategory);
+
             case FilterRuleType.PeriodInOut:
                 return predicates.PeriodInOut(command, rule.InPeriod!.Value, context.PeriodStart, context.PeriodEnd);
 
@@ -97,6 +102,28 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
                 // 自訂低頻科目門檻（C9 自訂軌）：maxEntries 取代固定預設 11，述詞同 lowFrequencyAccount。
                 return predicates.LowFrequencyAccount(command, rule.MaxEntries!.Value);
 
+            case FilterRuleType.RevenueDebitNearQuarterEnd:
+                // KCT 清單 A：季底視窗由 Domain 純函式自查核期間 + windowDays 算出（識別字不來自使用者）。
+                return predicates.RevenueDebitNearQuarterEnd(
+                    command,
+                    QuarterEndWindows.Compute(context.PeriodStart, context.PeriodEnd, rule.WindowDays!.Value));
+
+            case FilterRuleType.RevenueWithoutNormalCounterpart:
+                // KCT 清單 C：unexpected_account_pair 的否定面（不含 Cash 為一般對方科目）。
+                return predicates.RevenueWithoutNormalCounterpart(command);
+
+            case FilterRuleType.ManualRevenueEntry:
+                // KCT 清單 D：科目 = Revenue ∧ is_manual = 1。
+                return predicates.ManualRevenueEntry(command);
+
+            case FilterRuleType.TrailingDigits:
+                // KCT 清單 H：尾數樣態重用 Keywords；顯示金額主單位整數尾數比對。
+                return predicates.TrailingDigits(command, rule.Keywords, context.MoneyScale);
+
+            case FilterRuleType.PreparerEqualsApprover:
+                // KCT 清單 J：created_by = approved_by（皆非空）。
+                return predicates.PreparerEqualsApprover();
+
             default:
                 throw new InvalidOperationException($"未處理的規則型別 {rule.Type}。");
         }
@@ -114,8 +141,8 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
             PrescreenRuleKeys.SuspiciousKeywords => predicates.SuspiciousKeywords(command),
             PrescreenRuleKeys.UnexpectedAccountPair => predicates.UnexpectedAccountPair(command),
             PrescreenRuleKeys.TrailingZeros => predicates.TrailingZeros(command, zeroModulus),
-            PrescreenRuleKeys.WeekendPosting => predicates.Weekend("post_date"),
-            PrescreenRuleKeys.WeekendApproval => predicates.Weekend("approval_date"),
+            PrescreenRuleKeys.WeekendPosting => predicates.Weekend("post_date", context.NonWorkingDays),
+            PrescreenRuleKeys.WeekendApproval => predicates.Weekend("approval_date", context.NonWorkingDays),
             PrescreenRuleKeys.HolidayPosting => predicates.Holiday("post_date"),
             PrescreenRuleKeys.HolidayApproval => predicates.Holiday("approval_date"),
             PrescreenRuleKeys.BlankDescription => predicates.BlankDescription(),

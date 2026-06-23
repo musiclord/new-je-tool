@@ -242,6 +242,80 @@ public sealed class FilterScenarioValidatorTests
         Assert.Equal(expectValid, errors.Count == 0);
     }
 
+    /* ---- 考量特殊科目類別配對（specialAccountCategoryPair）---------------- */
+
+    private const string SpecialPairMappingError = "特殊科目類別配對需先匯入科目配對。";
+
+    private static FilterRuleSpec SpecialPairRule(
+        string? pairMode, string? debitCategory, string? creditCategory) =>
+        new(FilterJoin.And, FilterRuleType.SpecialAccountCategoryPair, null, null, [], TextMatchMode.Contains,
+            null, null, null, null, null, null,
+            PairMode: pairMode, DebitCategory: debitCategory, CreditCategory: creditCategory);
+
+    private static IReadOnlyList<string> ValidateSpecialPair(
+        string? pairMode, string? debit, string? credit, bool hasMapping) =>
+        FilterScenarioValidator.Validate(
+            Scenario(rules: SpecialPairRule(pairMode, debit, credit)),
+            Ready with { HasAccountMapping = hasMapping });
+
+    private static bool HasError(IReadOnlyList<string> errors, string fragment) =>
+        errors.Any(e => e.Contains(fragment, StringComparison.Ordinal));
+
+    // 決策表：{科目配對 T/F} × {借方分類 valid/invalid} × {貸方分類 valid/invalid} × {模式 valid/invalid}。
+    // 鎖「具體錯誤的有無」而非只看筆數。關鍵不變量：模式非法時 validator 早退，
+    // 不再產生分類錯誤（故 illegal-mode 列的分類維度被遮蔽——以「不應出現分類錯誤」斷言鎖住此行為）。
+    //  mode    | debit       | credit      | map | 期望錯誤集合
+    //  drAndCr | Revenue     | Cash        | T   | （無）
+    //  drNotCr | Revenue     | Cash        | T   | （無）
+    //  notDrCr | Revenue     | Cash        | T   | （無）
+    //  drAndCr | Revenue     | Cash        | F   | mapping
+    //  drAndCr | BAD         | Cash        | T   | debit
+    //  drAndCr | Revenue     | BAD         | T   | credit
+    //  drAndCr | BAD         | BAD         | T   | debit + credit
+    //  drAndCr | (缺)        | Cash        | T   | debit（否定/正向皆需雙類別）
+    //  drAndCr | Revenue     | (缺)        | T   | credit
+    //  BADMODE | Revenue     | Cash        | T   | mode（且不得有分類錯誤——早退遮蔽）
+    //  BADMODE | BAD         | BAD         | F   | mapping + mode（mapping 先於模式判定；分類被遮蔽）
+    //  (缺)    | Revenue     | Cash        | T   | mode（null 視為非法模式）
+    [Theory]
+    [InlineData("drAndCr", "Revenue", "Cash", true, false, false, false, false)]
+    [InlineData("drNotCr", "Revenue", "Cash", true, false, false, false, false)]
+    [InlineData("notDrCr", "Revenue", "Cash", true, false, false, false, false)]
+    [InlineData("drAndCr", "Revenue", "Cash", false, true, false, false, false)]
+    [InlineData("drAndCr", "NotACategory", "Cash", true, false, false, true, false)]
+    [InlineData("drAndCr", "Revenue", "NotACategory", true, false, false, false, true)]
+    [InlineData("drAndCr", "NotACategory", "NotACategory", true, false, false, true, true)]
+    [InlineData("drAndCr", null, "Cash", true, false, false, true, false)]
+    [InlineData("drAndCr", "Revenue", null, true, false, false, false, true)]
+    [InlineData("badMode", "Revenue", "Cash", true, false, true, false, false)]
+    [InlineData("badMode", "NotACategory", "NotACategory", false, true, true, false, false)]
+    [InlineData(null, "Revenue", "Cash", true, false, true, false, false)]
+    public void Validate_SpecialAccountCategoryPairDecisionTable(
+        string? pairMode, string? debit, string? credit, bool hasMapping,
+        bool expectMappingError, bool expectModeError, bool expectDebitError, bool expectCreditError)
+    {
+        var errors = ValidateSpecialPair(pairMode, debit, credit, hasMapping);
+
+        Assert.Equal(expectMappingError, HasError(errors, SpecialPairMappingError));
+        Assert.Equal(expectModeError, HasError(errors, "允許值：drAndCr、drNotCr、notDrCr"));
+        Assert.Equal(expectDebitError, HasError(errors, $"借方分類「{debit}」不在標準化分類白名單"));
+        Assert.Equal(expectCreditError, HasError(errors, $"貸方分類「{credit}」不在標準化分類白名單"));
+
+        // 整體合法性 = 無任何上述錯誤。
+        var expectValid = !expectMappingError && !expectModeError && !expectDebitError && !expectCreditError;
+        Assert.Equal(expectValid, errors.Count == 0);
+    }
+
+    [Fact]
+    public void Validate_SpecialAccountCategoryPair_IllegalMode_SuppressesCategoryChecks()
+    {
+        // 鎖早退語意：模式非法時，即便雙分類都非白名單，也只報模式錯誤、不報分類錯誤。
+        var errors = ValidateSpecialPair("notAMode", "NotACategory", "AlsoBad", hasMapping: true);
+
+        Assert.Contains(errors, e => e.Contains("允許值：drAndCr、drNotCr、notDrCr", StringComparison.Ordinal));
+        Assert.DoesNotContain(errors, e => e.Contains("不在標準化分類白名單", StringComparison.Ordinal));
+    }
+
     // BVA：自訂尾數位數 1–12（0 下鄰拒、1 邊界收、12 邊界收、13 上鄰拒、缺漏拒）。
     [Theory]
     [InlineData(0, false)]
@@ -316,5 +390,137 @@ public sealed class FilterScenarioValidatorTests
             TextMatchMode.Contains, null, null, null, null, null, null);
 
         Assert.NotEmpty(FilterScenarioValidator.Validate(Scenario(rules: rule), Ready));
+    }
+
+    /* ---- KCT 小組條件（清單 A/C/D/H/J） ---------------------------------- */
+
+    private static FilterRuleSpec KctRule(FilterRuleType type, int? windowDays = null, params string[] keywords) =>
+        new(FilterJoin.And, type, null, null, keywords, TextMatchMode.Contains,
+            null, null, null, null, null, null, WindowDays: windowDays);
+
+    [Fact]
+    public void Validate_RevenueDebitNearQuarterEnd_WithoutAccountMapping_ReturnsError()
+    {
+        // 清單 A 需科目配對已匯入（鏡射 accountPair 閘控）。
+        var rule = KctRule(FilterRuleType.RevenueDebitNearQuarterEnd, windowDays: 5);
+
+        Assert.NotEmpty(FilterScenarioValidator.Validate(Scenario(rules: rule), Ready));
+    }
+
+    // BVA：季末視窗天數 1–92（0 下鄰拒、1 邊界收、92 上界收、93 上鄰拒、缺漏拒）。科目配對已匯入。
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(92, true)]
+    [InlineData(93, false)]
+    [InlineData(null, false)]
+    public void Validate_RevenueDebitNearQuarterEnd_WindowDaysBoundaries(int? windowDays, bool expectValid)
+    {
+        var rule = KctRule(FilterRuleType.RevenueDebitNearQuarterEnd, windowDays: windowDays);
+
+        var errors = FilterScenarioValidator.Validate(
+            Scenario(rules: rule), Ready with { HasAccountMapping = true });
+
+        Assert.Equal(expectValid, errors.Count == 0);
+    }
+
+    // 決策表：清單 C/D 需科目配對（false→錯誤、true→合法）。
+    [Theory]
+    [InlineData("revenueWithoutNormalCounterpart", false, false)]
+    [InlineData("revenueWithoutNormalCounterpart", true, true)]
+    [InlineData("manualRevenueEntry", false, false)]
+    [InlineData("manualRevenueEntry", true, true)]
+    public void Validate_KctRevenueConditions_RequireAccountMapping(
+        string typeName, bool hasMapping, bool expectValid)
+    {
+        var type = typeName == "revenueWithoutNormalCounterpart"
+            ? FilterRuleType.RevenueWithoutNormalCounterpart
+            : FilterRuleType.ManualRevenueEntry;
+
+        var errors = FilterScenarioValidator.Validate(
+            Scenario(rules: KctRule(type)), Ready with { HasAccountMapping = hasMapping });
+
+        Assert.Equal(expectValid, errors.Count == 0);
+    }
+
+    // 決策表：清單 H 尾數樣態（合法多組、1 位邊界、12 位邊界、13 位拒、非數字拒、空清單拒）。
+    [Theory]
+    [InlineData(true, "999999", "000000")]
+    [InlineData(true, "0")]
+    [InlineData(true, "123456789012")]
+    [InlineData(false, "1234567890123")]
+    [InlineData(false, "99x")]
+    [InlineData(false)]
+    public void Validate_TrailingDigits_PatternRules(bool expectValid, params string[] patterns)
+    {
+        var errors = FilterScenarioValidator.Validate(
+            Scenario(rules: KctRule(FilterRuleType.TrailingDigits, keywords: patterns)), Ready);
+
+        Assert.Equal(expectValid, errors.Count == 0);
+    }
+
+    [Fact]
+    public void Validate_PreparerEqualsApprover_NoParams_IsValid()
+    {
+        // 清單 J 無參數、無前置條件（createBy/approveBy 缺映射時零命中由述詞處理）。
+        Assert.Empty(FilterScenarioValidator.Validate(
+            Scenario(rules: KctRule(FilterRuleType.PreparerEqualsApprover)), Ready));
+    }
+
+    /* ---- KCT 來源豁免名稱/動機必填（manifest scenario.source）------------- */
+
+    private const string NameRequiredError = "情境名稱必填。";
+    private const string RationaleRequiredError = "篩選動機說明必填。";
+
+    // 決策表：source ∈ {null, "kct"} × name ∈ {空, 有} × rationale ∈ {空, 有}。
+    // KCT 來源 ⇒ 無論名稱/動機是否留白，皆不產生「必填」錯誤（固定方法論清單，留痕替補在落地層補）。
+    // 非 KCT 來源 ⇒ 留白才報對應的「必填」錯誤（既往行為，不得鬆動）。
+    //  source | name | rationale | 期望含名稱必填 | 期望含動機必填
+    [Theory]
+    [InlineData(null, "", "", true, true)]
+    [InlineData(null, "情境", "", false, true)]
+    [InlineData(null, "", "動機", true, false)]
+    [InlineData(null, "情境", "動機", false, false)]
+    [InlineData("kct", "", "", false, false)]
+    [InlineData("kct", "情境", "", false, false)]
+    [InlineData("kct", "", "動機", false, false)]
+    [InlineData("kct", "情境", "動機", false, false)]
+    public void Validate_SourceExemptsNameAndRationale(
+        string? source, string name, string rationale, bool expectNameError, bool expectRationaleError)
+    {
+        // 規則本身固定合法（TextRule），故僅可能出現名稱/動機兩種錯誤——可對訊息身分精準斷言。
+        var scenario = new FilterScenarioSpec(name, rationale, [new FilterGroupSpec(FilterJoin.And, [TextRule()])], source);
+
+        var errors = FilterScenarioValidator.Validate(scenario, Ready);
+
+        Assert.Equal(expectNameError, errors.Contains(NameRequiredError));
+        Assert.Equal(expectRationaleError, errors.Contains(RationaleRequiredError));
+    }
+
+    [Fact]
+    public void Validate_UnknownSource_TreatedAsAuthored_StillRequiresNameAndRationale()
+    {
+        // 「非 kct 即查核員自擬」：未知來源值不得意外豁免必填（白名單只認得 "kct"）。
+        var scenario = new FilterScenarioSpec(
+            "  ", "  ", [new FilterGroupSpec(FilterJoin.And, [TextRule()])], Source: "adhoc");
+
+        var errors = FilterScenarioValidator.Validate(scenario, Ready);
+
+        Assert.Contains(NameRequiredError, errors);
+        Assert.Contains(RationaleRequiredError, errors);
+    }
+
+    [Fact]
+    public void Validate_KctSource_DoesNotSuppressOtherErrors()
+    {
+        // 豁免只限名稱/動機兩項：KCT 來源仍須通過其餘所有驗證（此處用未知 field 觸發）。
+        var scenario = new FilterScenarioSpec(
+            "", "", [new FilterGroupSpec(FilterJoin.And, [TextRule(field: "no_such_field")])], Source: "kct");
+
+        var errors = FilterScenarioValidator.Validate(scenario, Ready);
+
+        Assert.DoesNotContain(NameRequiredError, errors);
+        Assert.DoesNotContain(RationaleRequiredError, errors);
+        Assert.NotEmpty(errors); // 未知 field 仍被擋下
     }
 }

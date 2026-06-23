@@ -35,7 +35,7 @@
       tb: null,
       accountMapping: null,    // { batchId, rowCount, fileName, importedUtc }
       authorizedPreparer: null, // 匯入當下 { batchId, rowCount, fileName, importedUtc }；resume(project.load) 只 { rowCount }
-      calendar: null           // { holidayCount, makeupDayCount }
+      calendar: null           // { holidayCount, makeupDayCount, nonWorkingDays }
     },
     // committed = 已提交快照 { projectedRowCount, committedUtc, mapping, mode }（resume 時 projectedRowCount 可為 null）；
     // invalidatedByImport = 來源變更使配對失效（顯示說明橫幅，重新提交後解除）。

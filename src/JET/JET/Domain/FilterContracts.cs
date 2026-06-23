@@ -10,7 +10,8 @@ public sealed record FilterRuleContext(
     int MoneyScale,
     string? LastPeriodStart,
     string PeriodStart,
-    string PeriodEnd);
+    string PeriodEnd,
+    IReadOnlyList<int>? NonWorkingDays = null);
 
 public sealed record FilterPreviewRow(
     string? DocumentNumber,

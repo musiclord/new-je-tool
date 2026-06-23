@@ -542,6 +542,7 @@
           '<p class="panel__warn">尚未確認 GL 欄位配對，無法執行；請先回「欄位配對」完成確認。</p>') +
         statsBarHtml(v) +
         validationCardHtml(v, ready) +
+        accountMappingCardHtml(state.importState.accountMapping, !!v) +
         prescreenCardHtml(p, ready) +
         '<div class="panel__actions">' + Ui.MOCK_BUTTON_HTML + '</div>' +
         Ui.stepFooterHtml(state) +
@@ -633,6 +634,85 @@
     );
   }
 
+  // 科目配對匯入區塊：方法論上排在「資料驗證」（含完整性測試）之後、「風險預篩選」之前。
+  // 完整性測試先確認 GL 母體完整,科目配對分析才有意義;且預篩選的「未預期出現之特定借貸組合」
+  // 倚賴科目配對,故配對必須能在預篩選執行前匯入(避免「跑兩次預篩選」)。
+  //
+  // 解鎖門檻:只有在「資料驗證」已執行過(state.lastRuns.validate 存在)後,才開放匯入/重新匯入鈕。
+  // 差異不擋——驗證「跑過」即解鎖,完整性差異由查核人員另行勾稽。
+  // 狀態恆顯示:不論門檻,只要已匯入(含 resume)就顯示「已匯入 N 科目」+「預覽科目配對」;
+  // 被門檻擋住的只有匯入/重新匯入鈕本身。前端只做 UX gate,後端預篩選仍是 unexpectedAccountPair 的權威 gating。
+  function accountMappingCardHtml(info, validateHasRun) {
+    var status = info
+      ? '<p class="import-card__status import-card__status--ok">已匯入 ' + info.rowCount + ' 個科目' +
+          (info.fileName ? '（' + Ui.esc(info.fileName) + '）' : '') + '。</p>'
+      : '<p class="import-card__status">尚未匯入。匯入後可執行「未預期出現之特定借貸組合」與科目配對分析。</p>';
+
+    // 已匯入時恆提供「預覽科目配對」(沿用全域資料預覽面板);與門檻無關。
+    var previewBtn = info
+      ? '<button type="button" class="btn btn--ghost" data-action="preview-account-mapping"' +
+          ' title="開啟資料預覽，檢視已匯入的科目配對前 50 筆">預覽科目配對</button>'
+      : '';
+
+    // 匯入/重新匯入鈕只在驗證已執行後出現;否則顯示前置條件提示。
+    var importControls = validateHasRun
+      ? '<button type="button" class="btn' + (info ? ' btn--ghost' : '') +
+          '" data-action="import-account-mapping">' +
+          (info ? '重新匯入科目配對檔' : '選擇科目配對檔') + '</button>'
+      : '<p class="rule-card__gate">請先執行「資料驗證」後，再匯入科目配對。</p>';
+
+    return (
+      '<section class="rule-card" data-bind="account-mapping-card">' +
+        '<h3 class="rule-card__title">科目配對（科目 → 標準化分類）</h3>' +
+        '<p class="rule-card__sub">完整性測試確認總帳母體完整後，再以科目配對標準化分類；' +
+          '配對為「未預期出現之特定借貸組合」預篩選與科目配對分析的前提。</p>' +
+        status +
+        '<div class="import-card__actions">' +
+          importControls +
+          previewBtn +
+        '</div>' +
+      '</section>'
+    );
+  }
+
+  // 科目配對區塊綁定:沿用既有 action / store / 資料預覽契約,僅位置從 import-step 移來。
+  // 預覽鈕與門檻無關(已匯入即可預覽);匯入鈕只在驗證已執行時才存在(render 已 gate),
+  // 此處用存在性檢查綁定,故門檻邏輯不洩漏到 bind。
+  function bindAccountMappingCard(container) {
+    var previewBtn = container.querySelector('[data-action="preview-account-mapping"]');
+    if (previewBtn && Ui.openDataPreview) {
+      previewBtn.addEventListener('click', function () {
+        Ui.openDataPreview('accountMappings');
+      });
+    }
+
+    var btn = container.querySelector('[data-action="import-account-mapping"]');
+    if (!btn) { return; }
+
+    btn.addEventListener('click', function () {
+      Ui.run('匯入科目配對', function () {
+        return global.JetApi.hostSelectFile({
+          title: '選擇科目配對檔（科目代號、科目名稱、標準化分類）',
+          extensions: ['.xlsx', '.csv']
+        }).then(function (file) {
+          if (!file.filePath) { return; }
+          return global.JetApi.importAccountMappingFromFile({
+            filePath: file.filePath,
+            fileName: file.fileName
+          }).then(function (data) {
+            Store.setAccountMappingState({
+              batchId: data.batchId,
+              rowCount: data.rowCount,
+              fileName: data.fileName,
+              importedUtc: data.importedUtc
+            });
+            Store.addMessage('科目配對匯入完成：' + data.rowCount + ' 個科目。', 'info');
+          });
+        });
+      });
+    });
+  }
+
   function prescreenCardHtml(p, ready) {
     return (
       '<section class="rule-card">' +
@@ -652,6 +732,7 @@
   function bind(container, ready) {
     Ui.bindMockButton(container, 'validate');
     Ui.bindStepFooter(container);
+    bindAccountMappingCard(container);
 
     // 「載入更多」綁定:每顆鈕依 id 查 LOAD_MORE_SPECS 取 fetchPage + columns,
     // 接列目標 tbody 以 data-load-target=<第一個 id> 標記(同 tbody 可有多顆鈕)。

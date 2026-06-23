@@ -27,7 +27,7 @@ public sealed class QueryDataPreviewHandler(
         {
             throw new JetActionException(
                 JetErrorCodes.InvalidPayload,
-                $"dataset '{datasetName}' 無效，允許值：glStaging、tbStaging、glEntries、tbBalances、accountMappings、authorizedPreparers。");
+                $"dataset '{datasetName}' 無效，允許值：glStaging、tbStaging、glEntries、tbBalances、accountMappings、authorizedPreparers、dateDimension、schemaOverview。");
         }
 
         var limit = Math.Clamp(PayloadReader.GetOptionalInt(payload, "limit") ?? DefaultLimit, 1, MaxLimit);

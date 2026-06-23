@@ -1,6 +1,12 @@
 /*
   Step 4：進階條件篩選（條件 AST + Query Builder）。
   前端只組裝 AST 與渲染；條件由後端轉參數化 SQL 評估，前端不計算規則。
+
+  版面（由上而下）：
+    1. 「KCT條件」選取區塊  —— A–J 可複選 toggle，累積成同一情境的條件。
+    2. 「自訂篩選條件」選取區塊 —— 四組等寬卡片，點一張＝新增一條可重複的自訂條件。
+    3. 「建立篩選情境」彙總調整區塊 —— 彙總全部已選條件，設定數值/下拉/AND-OR，命名與動機必填。
+    4. 預覽結果／已儲存情境／高風險條件矩陣（行為不變）。
 */
 (function (global) {
   'use strict';
@@ -25,95 +31,298 @@
     });
   }
 
-  function render(container, state) {
-    if (!state.project) {
-      container.innerHTML = Ui.noProjectPanel('進階條件篩選');
-      Ui.bindNoProjectPanel(container);
+  /* ============================================================================
+     KCT 卡 ↔ 草稿成員：介面小、實作深的少數函式（Ousterhout）。
+     一張 KCT 卡 = 一份「rule 規格」陣列（kctRuleSpecs）。加入 = 把這些規格化成真 rule、
+     在每條 rule 上打一個穩定的身分標記（__kctLetter = 卡片字母）併進草稿；已選偵測 =
+     草稿中是否存在帶該卡字母標記的 rule；移除 = 把所有帶該卡字母標記的 rule 挑掉。
+
+     為何用標記而非結構簽章（取捨顯式）：先前以 type(+field/mode/prescreenKey) 的結構簽章
+     猜「這條 rule 是不是這張卡帶進來的」。但 KCT 卡的簽章會與查核員「自訂」的同型別條件
+     重疊——例如卡 F(customKeywords) 會被任何手動加入的自訂關鍵字條件誤判為「已選」，且移除
+     時只刪「第一條」同簽章 rule，可能誤刪使用者手動加入的條件。改用精確身分標記後，這一整類
+     誤判／誤刪的 edge case 直接消失（Linus）：自訂的同型別條件不帶標記，永遠不會被當成 KCT。
+
+     __kctLetter 是 UI-only 標記（鍵名以雙底線開頭、明示「內部用途、不屬 wire 契約」），絕不可
+     送進後端。所有送出點一律經 toWireScenario() 深拷貝並遞迴剝除，wire 形狀恆為
+     { name, rationale, groups }，groups 內每條 rule 不含任何 UI-only 鍵（見 toWireScenario）。
+     ============================================================================ */
+
+  // rule 身分標記鍵：標示「這條 rule 是哪張 KCT 卡帶進來的」。UI-only，絕不送 wire（由
+  // toWireScenario 剝除）。集中為常數，讓打標記／偵測／剝除三處引用同一事實。
+  var KCT_LETTER_KEY = '__kctLetter';
+
+  // 一張 KCT 卡會建立的「rule 規格」陣列（純資料；type 必填，其餘為覆寫鍵）。
+  //   kind:'type'   → 單一規格 { type: ref }，落地為 newFilterRule(ref)。
+  //   kind:'preset' → 沿用 FILTER_KCT_PRESETS：newGroup 為多條規格，否則單一 overrides 規格。
+  function kctRuleSpecs(item) {
+    if (item.kind === 'preset') {
+      var preset = Ui.FILTER_KCT_PRESETS.filter(function (p) { return p.key === item.ref; })[0];
+      if (!preset) { return []; }
+      return preset.newGroup ? preset.newGroup.slice() : [preset.overrides];
+    }
+    return item.ref ? [{ type: item.ref }] : [];
+  }
+
+  // 把一條規格落地成真 rule，並打上該卡的身分標記：以 newFilterRule(type) 為底，套上規格的
+  // 覆寫鍵（field/mode/prescreenKey/join…），最後標 __kctLetter = letter（UI-only，剝除後才送 wire）。
+  function materializeRule(spec, letter) {
+    var rule = Ui.newFilterRule(spec.type);
+    Object.keys(spec).forEach(function (k) { rule[k] = spec[k]; });
+    rule[KCT_LETTER_KEY] = letter;
+    return rule;
+  }
+
+  // 已選偵測：草稿中是否存在帶該卡字母標記的 rule。純比對身分標記，不再做結構簽章猜測，
+  // 故使用者自訂的同型別條件（不帶標記）永遠不會誤觸已選。空規格＝停用卡，不算已選。
+  function isKctSelected(draft, item) {
+    if (kctRuleSpecs(item).length === 0) { return false; }
+    return draft.groups.some(function (g) {
+      return g.rules.some(function (r) { return r[KCT_LETTER_KEY] === item.letter; });
+    });
+  }
+
+  // 加入：把該卡的規格落地成帶標記的 rule 併進草稿（就地修改傳入 draft）。
+  //   preset 的 newGroup（如 I：非營業日 weekend OR holiday）自成一組帶入，避免 OR 與其他條件結合錯位；
+  //   其餘規格併入最後一個群組（沒有群組就先開一個 AND 群組）——多卡累積成同一情境。
+  function addKctToDraft(draft, item) {
+    var specs = kctRuleSpecs(item);
+    if (specs.length === 0) { return; }
+
+    var preset = item.kind === 'preset'
+      ? Ui.FILTER_KCT_PRESETS.filter(function (p) { return p.key === item.ref; })[0]
+      : null;
+
+    // 預設 I（非營業日 = weekend OR holiday）自成一組：組合器固定「任一(OR)」、與前一組亦以 OR 連接
+    //（多個 KCT 方法學紅旗，命中任一即算；避免與其他條件 AND 而幾乎零命中）。
+    if (preset && preset.newGroup) {
+      draft.groups.push({ join: 'OR', rules: specs.map(function (s) {
+        var r = materializeRule(s, item.letter);
+        r.join = 'OR';
+        return r;
+      }) });
       return;
     }
 
-    var draft = state.filter.draft;
-    var saved = state.filter.savedScenarios;
-    var prescreenRun = state.lastRuns.prescreen;
-    var draftRuleCount = draft.groups.reduce(function (sum, g) { return sum + g.rules.length; }, 0);
-
-    container.innerHTML =
-      '<div class="panel panel--wide">' +
-        '<h2 class="panel__title">進階條件篩選</h2>' +
-        '<p class="panel__hint">以條件群組（AND / OR 由左至右結合）組合篩選情境，最多保存 10 個；' +
-          '所有條件一律由後端在資料庫中計算，前端只負責組裝與顯示。</p>' +
-        '<div class="stats-bar">' +
-          '<div class="stat-card">' +
-            '<span class="stat-card__value">' + (prescreenRun ? '已執行' : '未執行') + '</span>' +
-            '<span class="stat-card__label">風險預篩選</span>' +
-          '</div>' +
-          '<div class="stat-card">' +
-            '<span class="stat-card__value">' + draftRuleCount + '</span>' +
-            '<span class="stat-card__label">草稿規則數</span>' +
-          '</div>' +
-          '<div class="stat-card">' +
-            '<span class="stat-card__value">' + saved.length + ' / 10</span>' +
-            '<span class="stat-card__label">已儲存情境</span>' +
-          '</div>' +
-        '</div>' +
-        scenarioBuilderHtml(draft) +
-        previewPaneHtml(state.filter.preview) +
-        savedScenariosHtml(saved) +
-        tagMatrixHtml(saved) +
-        '<div class="panel__actions">' + Ui.MOCK_BUTTON_HTML + '</div>' +
-        Ui.stepFooterHtml(state) +
-      '</div>';
-
-    bind(container);
+    // 單規則 KCT：併入最後一組；需新建時組合器預設「任一(OR)」（理由同上）。新規則 join 取該組現有
+    // 組合器以維持群組內一致（groupCombinator）。
+    if (draft.groups.length === 0) {
+      draft.groups.push({ join: 'AND', rules: [] });
+    }
+    var last = draft.groups[draft.groups.length - 1];
+    var combinator = last.rules.length ? groupCombinator(last) : 'OR';
+    specs.forEach(function (spec) {
+      var r = materializeRule(spec, item.letter);
+      r.join = combinator;
+      last.rules.push(r);
+    });
   }
 
-  // 快速加入：依審計意圖分組呈現（FILTER_RULE_GROUPS 順序），每組一個小標題＋該組可用型別鈕。
-  // 只渲染目前可用（通過鏡像閘門）的型別；某組全數不可用時整組省略。
-  function quickAddGroupsHtml() {
+  // 移除：把所有帶該卡字母標記的 rule 從草稿挑掉，並清掉因此變空的群組（就地修改傳入 draft）。
+  // 只刪自身標記者——使用者手動加入的同型別條件（無標記）絕不被動到；preset I 的整組因兩條都帶
+  // 同一字母標記而一起清空，該空 group 隨即被濾除，不留空 group、不破壞其餘 group 的 join 結構。
+  function removeKctFromDraft(draft, item) {
+    draft.groups.forEach(function (g) {
+      g.rules = g.rules.filter(function (r) { return r[KCT_LETTER_KEY] !== item.letter; });
+    });
+    draft.groups = draft.groups.filter(function (g) { return g.rules.length > 0; });
+  }
+
+  // wire 投影（單一收斂點）：把一個情境（草稿或已存）深拷貝成 filter.preview / filter.commit 的
+  // wire 形狀——只 { name, rationale, groups }，且 groups 內每條 rule 都遞迴剝除 __kctLetter 等
+  // 任何 UI-only 鍵。深拷貝是關鍵：淺取 groups 會讓 wire 仍指向帶標記的 rule 物件。所有送往後端的
+  // scenario/draft 一律經此，確保 UI-only 標記絕不外洩到 wire（Karpathy：不靜默假設、顯式剝除）。
+  function toWireScenario(s) {
+    return {
+      name: s.name,
+      rationale: s.rationale,
+      groups: (s.groups || []).map(function (g) {
+        return {
+          join: g.join,
+          rules: (g.rules || []).map(function (r) {
+            var clean = {};
+            Object.keys(r).forEach(function (k) {
+              if (k !== KCT_LETTER_KEY) { clean[k] = r[k]; }
+            });
+            return clean;
+          })
+        };
+      })
+    };
+  }
+
+  // 群組組合器：群組內規則 join 的一致值——任一規則為 OR 即「任一(OR)」，否則「全部(AND)」。空群組
+  // 回退「全部」。組合器＝把群組內各規則 join 設為同值，後端逐條 join 評估等價（全 AND＝符合全部、全 OR＝任一）。
+  function groupCombinator(group) {
+    return group.rules.some(function (r) { return r.join === 'OR'; }) ? 'OR' : 'AND';
+  }
+
+  // KCT 命名（使用者指定）：所選 KCT 卡的字母，依 FILTER_KCT_CHECKLIST（A→J）順序以 '+' 串接（如 E+F+G）。
+  function kctScenarioName(draft) {
+    return Ui.FILTER_KCT_CHECKLIST
+      .filter(function (item) { return isKctSelected(draft, item); })
+      .map(function (item) { return item.letter; })
+      .join('+');
+  }
+
+  // KCT 動機（使用者指定）：每個所選 KCT 卡的詳細說明逐行列出（字母＋清單 label）。
+  function kctScenarioRationale(draft) {
+    return Ui.FILTER_KCT_CHECKLIST
+      .filter(function (item) { return isKctSelected(draft, item); })
+      .map(function (item) { return item.letter + '：' + item.label; })
+      .join('\n');
+  }
+
+  // 勾選/取消 KCT 後重算名稱與動機並寫回草稿：KCT 選取主導命名；無 KCT 規則時清空兩欄，交回手動填寫
+  //（純自訂條件的情境）。就地修改傳入 draft。
+  function applyKctNaming(draft) {
+    var name = kctScenarioName(draft);
+    draft.name = name;
+    draft.rationale = name ? kctScenarioRationale(draft) : '';
+  }
+
+  // 分段控制（segmented）：一排互斥按鈕，目前值加 .is-on。kind+index 供事件委派定位（見 bind 的
+  // [data-segmented] 處理）。用於群組組合器（全部/任一）與群組間連接器（AND/OR）。
+  function segmentedControl(kind, index, current, options) {
+    var btns = options.map(function (o) {
+      var on = o.value === current;
+      return '<button type="button" class="segmented__btn' + (on ? ' is-on' : '') + '"' +
+        ' data-segmented="' + kind + '" data-index="' + index + '" data-value="' + o.value + '"' +
+        ' aria-pressed="' + (on ? 'true' : 'false') + '">' + Ui.esc(o.label) + '</button>';
+    }).join('');
+    return '<span class="segmented">' + btns + '</span>';
+  }
+
+  /* ============================================================================
+     區塊 1：KCT條件 選取（A–J 可複選 toggle）
+     十顆卡片由 FILTER_KCT_CHECKLIST 一份資料驅動。已選/未選兩態由身分標記得出（isKctSelected：
+     草稿中是否存在帶該卡字母標記 __kctLetter 的 rule），不再做結構簽章猜測。
+     B（Phase 2 佔位）與需科目配對未匯入的 A/C/D：停用＋原因註記，不綁 toggle。
+     ============================================================================ */
+  function kctPickerHtml(draft) {
     var available = availableRuleTypes();
-    return Ui.FILTER_RULE_GROUPS.map(function (grp) {
-      var btns = available.filter(function (t) { return t.group === grp.key; }).map(function (t) {
-        return '<button type="button" class="btn btn--ghost" data-action="add-rule" data-rule-type="' +
-          t.value + '">+ ' + Ui.esc(t.quickLabel || t.label) + '</button>';
+    function typeAvailable(ref) {
+      return available.some(function (t) { return t.value === ref; });
+    }
+
+    var selectedCount = 0;
+    var cells = Ui.FILTER_KCT_CHECKLIST.map(function (item) {
+      // Phase 2 佔位優先；其次是「需科目配對但未匯入」的鏡像閘門停用。
+      var blockedByMapping = item.kind === 'type' && !item.disabled && !typeAvailable(item.ref);
+      var disabled = item.disabled || blockedByMapping;
+      var note = item.disabled
+        ? item.note
+        : (blockedByMapping ? '需先匯入科目配對' : '');
+
+      var selected = !disabled && isKctSelected(draft, item);
+      if (selected) { selectedCount++; }
+
+      var cls = 'picker-card picker-card--kct' +
+        (selected ? ' picker-card--selected' : '') +
+        (disabled ? ' picker-card--disabled' : '');
+
+      return '<button type="button" class="' + cls + '"' +
+          ' data-kct-letter="' + item.letter + '"' +
+          ' aria-pressed="' + (selected ? 'true' : 'false') + '"' +
+          (disabled ? ' disabled aria-disabled="true"' : '') + '>' +
+        '<span class="picker-card__mark" aria-hidden="true">' + (selected ? '✓' : '') + '</span>' +
+        '<span class="picker-card__letter">' + Ui.esc(item.letter) + '</span>' +
+        '<span class="picker-card__label">' + Ui.esc(item.label) + '</span>' +
+        (note ? '<span class="picker-card__note">' + Ui.esc(note) + '</span>' : '') +
+      '</button>';
+    }).join('');
+
+    return (
+      '<section class="condition-picker condition-picker--kct">' +
+        '<div class="condition-picker__head">' +
+          '<h3 class="condition-picker__title">KCT條件</h3>' +
+          '<span class="condition-picker__count">已選 ' + selectedCount + ' 項</span>' +
+        '</div>' +
+        '<p class="condition-picker__intro">點選方法學檢核清單（A–J），可複選；選取的條件會一起併入下方同一個情境。</p>' +
+        '<div class="condition-picker__grid condition-picker__grid--kct">' + cells + '</div>' +
+      '</section>'
+    );
+  }
+
+  /* ============================================================================
+     區塊 2：自訂篩選條件 選取（四組等寬卡片，點一張＝新增一條可重複的條件）
+     等寬/等高靠 CSS grid（condition-picker__grid）統一欄寬；每張卡固定內部結構（mark「＋」加入示意
+     ＋label）。仍遵守 availableRuleTypes 鏡像閘門；kct 分組不在此渲染（KCT 有自己的區塊）。
+     自訂條件可重複新增，故是「加入」非 toggle，不顯示任何計數（已移除舊版 ×N 徽章）。
+     ============================================================================ */
+  function customPickerHtml() {
+    var available = availableRuleTypes();
+
+    var groupsHtml = Ui.FILTER_RULE_GROUPS.map(function (grp) {
+      if (grp.key === 'kct') { return ''; }
+      var cards = available.filter(function (t) { return t.group === grp.key; }).map(function (t) {
+        return '<button type="button" class="picker-card picker-card--custom"' +
+            ' data-action="add-rule" data-rule-type="' + t.value + '">' +
+          '<span class="picker-card__mark" aria-hidden="true">＋</span>' +
+          '<span class="picker-card__label">' + Ui.esc(t.quickLabel || t.label) + '</span>' +
+        '</button>';
       }).join('');
-      if (!btns) { return ''; }
-      return '<div class="quick-add__group">' +
-        '<span class="quick-add__group-label">' + Ui.esc(grp.label) + '</span>' +
-        '<div class="quick-add__buttons">' + btns + '</div>' +
+      if (!cards) { return ''; }
+      return '<div class="condition-picker__group">' +
+        '<span class="condition-picker__group-label">' + Ui.esc(grp.label) + '</span>' +
+        '<div class="condition-picker__grid condition-picker__grid--custom">' + cards + '</div>' +
       '</div>';
     }).join('');
+
+    return (
+      '<section class="condition-picker condition-picker--custom">' +
+        '<div class="condition-picker__head">' +
+          '<h3 class="condition-picker__title">自訂篩選條件</h3>' +
+        '</div>' +
+        '<p class="condition-picker__intro">點一張卡片即新增一條可設定的條件，可重複加入；於下方彙總區設定其數值與邏輯。</p>' +
+        groupsHtml +
+      '</section>'
+    );
   }
 
+  /* ============================================================================
+     區塊 3：建立篩選情境（彙總調整）— 現代化分組組合器（每群組單一組合器「全部/任一」）。
+     彙總 draft.groups 的每一條條件供編輯（型別、欄位、數值）；每個群組一個組合器、群組間以 AND/OR
+     連接器串接（取代舊版逐條 join）。名稱與動機一律必填——KCT 選取會自動帶入（見 applyKctNaming）。
+     ============================================================================ */
   function scenarioBuilderHtml(draft) {
     var groupsHtml = draft.groups.length === 0
-      ? '<p class="empty-state">尚未建立規則；用「快速加入」加入第一條條件，或套用測試案件。</p>'
+      ? '<p class="empty-state">尚未選取任何條件；於上方「KCT條件」或「自訂篩選條件」加入第一條。</p>'
       : draft.groups.map(function (group, gi) {
-          var joinControl = gi === 0
-            ? '<span class="scenario-group__order">第一組</span>'
-            : '<select class="scenario-group__join" data-group-join="' + gi + '">' +
-                '<option value="AND"' + (group.join !== 'OR' ? ' selected' : '') + '>AND</option>' +
-                '<option value="OR"' + (group.join === 'OR' ? ' selected' : '') + '>OR</option>' +
-              '</select>';
+          // 群組間連接器（gi>=1）：此群組與前一組的關係（AND/OR）。第一組無連接器。
+          var connector = gi === 0 ? '' :
+            '<div class="group-connector">' +
+              segmentedControl('group-join', gi, group.join === 'OR' ? 'OR' : 'AND',
+                [{ value: 'AND', label: 'AND' }, { value: 'OR', label: 'OR' }]) +
+              '<span class="group-connector__hint">與上一組的關係</span>' +
+            '</div>';
+
+          // 群組組合器：此群組內各條件「符合全部(AND)／任一(OR)」。恆顯示於標頭（位置穩定、不移位）。
+          var combinator = segmentedControl('group-combinator', gi, groupCombinator(group),
+            [{ value: 'AND', label: '全部' }, { value: 'OR', label: '任一' }]);
 
           var rules = group.rules.map(function (rule, ri) {
             return ruleRowHtml(rule, gi, ri);
           }).join('');
 
           return (
+            connector +
             '<section class="scenario-group">' +
               '<div class="scenario-group__head">' +
-                '<span class="scenario-group__title">條件群組 ' + (gi + 1) + '</span>' +
-                joinControl +
-                '<button type="button" class="btn btn--ghost" data-action="remove-group" data-gi="' + gi +
+                '<span class="scenario-group__title">群組 ' + (gi + 1) + '</span>' +
+                '<span class="scenario-group__combo-label">符合</span>' +
+                combinator +
+                '<span class="scenario-group__combo-label">以下條件</span>' +
+                '<button type="button" class="btn btn--ghost scenario-group__remove" data-action="remove-group" data-gi="' + gi +
                   '">移除群組</button>' +
               '</div>' +
-              (rules || '<p class="empty-state">此群組沒有規則。</p>') +
+              (rules || '<p class="empty-state">此群組沒有條件；於上方挑選 KCT 或自訂條件加入。</p>') +
             '</section>'
           );
         }).join('');
 
     return (
-      '<section class="rule-card">' +
+      '<section class="rule-card scenario-builder">' +
         '<h3 class="rule-card__title">建立篩選情境</h3>' +
         '<label class="form__row">' +
           '<span class="form__label">情境名稱 <em class="form__req">*</em></span>' +
@@ -125,10 +334,6 @@
           '<textarea class="form__input" rows="2" data-bind="scenario-rationale" placeholder="說明這個情境為何值得保留到工作底稿">' +
             Ui.esc(draft.rationale) + '</textarea>' +
         '</label>' +
-        '<div class="quick-add">' +
-          '<span class="quick-add__intro">快速加入條件 — 依用途分組，點一下即加入一條：</span>' +
-          quickAddGroupsHtml() +
-        '</div>' +
         groupsHtml +
         '<p class="form-notice" data-bind="scenario-notice" role="alert" hidden></p>' +
         '<div class="panel__actions">' +
@@ -143,14 +348,8 @@
   }
 
   function ruleRowHtml(rule, gi, ri) {
-    var joinCell = ri === 0
-      ? '<span class="rule-row__join rule-row__join--first">第 1 條</span>'
-      : '<select class="rule-row__join" data-rule-bind="join">' +
-          '<option value="AND"' + (rule.join !== 'OR' ? ' selected' : '') + '>AND</option>' +
-          '<option value="OR"' + (rule.join === 'OR' ? ' selected' : '') + '>OR</option>' +
-        '</select>';
-
-    // 型別下拉以同一套四組（optgroup）呈現，與快速加入分組一致，強化分類語彙。
+    // 條件列不再有逐條 AND/OR——群組內的結合改由群組層級的「組合器」統一決定（見 scenarioBuilderHtml）。
+    // 型別下拉以同一套四組（optgroup）呈現，與自訂分組一致，強化分類語彙。
     var available = availableRuleTypes();
     var typeOptions = Ui.FILTER_RULE_GROUPS.map(function (grp) {
       var opts = available.filter(function (t) { return t.group === grp.key; }).map(function (t) {
@@ -162,7 +361,6 @@
 
     return (
       '<div class="rule-row" data-gi="' + gi + '" data-ri="' + ri + '">' +
-        joinCell +
         '<select class="rule-row__type" data-rule-bind="type">' + typeOptions + '</select>' +
         '<div class="rule-row__controls">' + ruleControlsHtml(rule) + '</div>' +
         '<button type="button" class="btn btn--ghost" data-action="remove-rule">移除</button>' +
@@ -233,6 +431,16 @@
           '<span class="rule-row__sep">借方</span>' + categorySelect('debitCategory', rule.debitCategory) +
           '<span class="rule-row__sep">貸方</span>' + categorySelect('creditCategory', rule.creditCategory);
 
+      case 'specialAccountCategoryPair':
+        // accountPair 的姊妹條件：三模式皆需借方類別(A) 與貸方類別(B) 皆填（否定模式同樣需要
+        // 兩類別才能判定「不存在」），故一律呈現兩個 categorySelect，重用同一 helper。
+        return '<select data-rule-bind="pairMode">' + Ui.SPECIAL_PAIR_MODE_OPTIONS.map(function (o) {
+            return '<option value="' + o.value + '"' + (rule.pairMode === o.value ? ' selected' : '') + '>' +
+              o.label + '</option>';
+          }).join('') + '</select>' +
+          '<span class="rule-row__sep">借方類別(A)</span>' + categorySelect('debitCategory', rule.debitCategory) +
+          '<span class="rule-row__sep">貸方類別(B)</span>' + categorySelect('creditCategory', rule.creditCategory);
+
       case 'periodInOut':
         return '<select data-rule-bind="inPeriod">' +
           '<option value="true"' + (rule.inPeriod !== 'false' ? ' selected' : '') + '>總帳日期在查核期間內</option>' +
@@ -258,6 +466,27 @@
         return '<span class="rule-row__field-label">科目全期張數 ≤</span>' +
           '<input type="number" data-rule-bind="maxEntries" min="1" step="1" value="' +
             Ui.esc(rule.maxEntries) + '">';
+
+      case 'revenueDebitNearQuarterEnd':
+        return '<span class="rule-row__field-label" title="總帳(過帳)日落在曆年季底前 N 天，且科目為收入、在借方側">季末前</span>' +
+          '<input type="number" data-rule-bind="windowDays" min="1" max="92" step="1" placeholder="天數" value="' +
+            Ui.esc(rule.windowDays) + '">' +
+          '<span class="rule-row__sep">天・借記收入</span>';
+
+      case 'revenueWithoutNormalCounterpart':
+        return '<span class="rule-row__field-label" title="貸方為收入，但同傳票無應收/預收的借方分錄">貸收入・借方非應收/預收</span>';
+
+      case 'manualRevenueEntry':
+        return '<span class="rule-row__field-label" title="科目為收入且為人工分錄">收入・人工分錄</span>';
+
+      case 'trailingDigits':
+        // Req 3：預設值已是 000000（placeholder 不會顯示），故把例子提示改放 title（hover tooltip）。
+        return '<span class="rule-row__field-label" title="顯示金額整數尾數符合任一樣態（捨小數）">金額尾數為</span>' +
+          '<input type="text" data-rule-bind="keywords" title="例：999999, 000000" value="' +
+            Ui.esc(rule.keywords) + '">';
+
+      case 'preparerEqualsApprover':
+        return '<span class="rule-row__field-label" title="同一張傳票的建立人員與核准人員相同">編製＝核准同一人</span>';
 
       default:
         return '';
@@ -290,6 +519,11 @@
         return prefix + '科目配對分析：' + (pairMode ? pairMode.label : rule.pairMode) +
           '（借方 ' + rule.debitCategory + '・貸方 ' + rule.creditCategory + '）';
       }
+      case 'specialAccountCategoryPair': {
+        var specialMode = Ui.SPECIAL_PAIR_MODE_OPTIONS.filter(function (o) { return o.value === rule.pairMode; })[0];
+        return prefix + '特殊科目配對：借 ' + rule.debitCategory + '／貸 ' + rule.creditCategory +
+          '（' + (specialMode ? specialMode.label : rule.pairMode) + '）';
+      }
       case 'periodInOut':
         return prefix + (rule.inPeriod === 'false' ? '總帳日期在查核期間外' : '總帳日期在查核期間內');
       case 'customKeywords':
@@ -300,6 +534,16 @@
         return prefix + '編製人員全期張數 ≤ ' + rule.maxEntries;
       case 'customAccountEntryCount':
         return prefix + '科目全期張數 ≤ ' + rule.maxEntries;
+      case 'revenueDebitNearQuarterEnd':
+        return prefix + '季末前 ' + (rule.windowDays || '…') + ' 天借記收入';
+      case 'revenueWithoutNormalCounterpart':
+        return prefix + '貸收入・借方非應收/預收';
+      case 'manualRevenueEntry':
+        return prefix + '收入之人工分錄';
+      case 'trailingDigits':
+        return prefix + '金額尾數「' + rule.keywords + '」';
+      case 'preparerEqualsApprover':
+        return prefix + '編製＝核准同一人';
       default:
         return prefix + rule.type;
     }
@@ -453,8 +697,53 @@
     });
   }
 
+  function render(container, state) {
+    if (!state.project) {
+      container.innerHTML = Ui.noProjectPanel('進階條件篩選');
+      Ui.bindNoProjectPanel(container);
+      return;
+    }
+
+    var draft = state.filter.draft;
+    var saved = state.filter.savedScenarios;
+    var prescreenRun = state.lastRuns.prescreen;
+    var draftRuleCount = draft.groups.reduce(function (sum, g) { return sum + g.rules.length; }, 0);
+
+    container.innerHTML =
+      '<div class="panel panel--wide">' +
+        '<h2 class="panel__title">進階條件篩選</h2>' +
+        '<p class="panel__hint">挑選 KCT 方法學條件或自訂條件，彙整成一個「篩選情境」，最多保存 10 個；' +
+          '所有條件一律由後端在資料庫中計算，前端只負責組裝與顯示。</p>' +
+        '<div class="stats-bar">' +
+          '<div class="stat-card">' +
+            '<span class="stat-card__value">' + (prescreenRun ? '已執行' : '未執行') + '</span>' +
+            '<span class="stat-card__label">風險預篩選</span>' +
+          '</div>' +
+          '<div class="stat-card">' +
+            '<span class="stat-card__value">' + draftRuleCount + '</span>' +
+            '<span class="stat-card__label">草稿規則數</span>' +
+          '</div>' +
+          '<div class="stat-card">' +
+            '<span class="stat-card__value">' + saved.length + ' / 10</span>' +
+            '<span class="stat-card__label">已儲存情境</span>' +
+          '</div>' +
+        '</div>' +
+        kctPickerHtml(draft) +
+        customPickerHtml() +
+        scenarioBuilderHtml(draft) +
+        previewPaneHtml(state.filter.preview) +
+        savedScenariosHtml(saved) +
+        tagMatrixHtml(saved) +
+        '<div class="panel__actions">' + Ui.MOCK_BUTTON_HTML + '</div>' +
+        Ui.stepFooterHtml(state) +
+      '</div>';
+
+    bind(container);
+  }
+
   // 預覽／保存前的前端引導：名稱、動機、至少一條件未補齊時，於欄位旁（紅框＋紅字）
   // 與按鈕上方（form-notice）就近提示並不送出。純呈現——後端 invalid_scenario 仍是權威。
+  // 名稱/動機一律必填（已退場 source:'kct' 的免填特例）。
   function scenarioGate(container) {
     var draft = Store.getState().filter.draft;
     var nameInput = container.querySelector('[data-bind="scenario-name"]');
@@ -522,15 +811,43 @@
       softRefreshGate(container);
     });
 
+    // 自訂條件卡：點一張＝新增一條該型別條件（可重複；併入最後一個群組，沒有就先開一組、組合器預設
+    // 「全部(AND)」）。新規則 join 取該組現有組合器以維持群組內一致。
     container.querySelectorAll('[data-action="add-rule"]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var draft = Store.getState().filter.draft;
         if (draft.groups.length === 0) {
           draft.groups.push({ join: 'AND', rules: [] });
         }
-        draft.groups[draft.groups.length - 1].rules.push(
-          Ui.newFilterRule(btn.getAttribute('data-rule-type')));
+        var last = draft.groups[draft.groups.length - 1];
+        var rule = Ui.newFilterRule(btn.getAttribute('data-rule-type'));
+        rule.join = last.rules.length ? groupCombinator(last) : 'AND';
+        last.rules.push(rule);
         Store.setFilterDraft(draft);
+      });
+    });
+
+    // KCT條件卡（A–J）：可複選 toggle —— 已選則移除、未選則加入；累積成同一情境。
+    // 停用卡（B/未匯入科目配對）不綁事件。加入/移除/已選偵測全收斂於上方少數深函式。
+    container.querySelectorAll('.picker-card--kct').forEach(function (btn) {
+      if (btn.disabled) { return; }
+      btn.addEventListener('click', function () {
+        var item = Ui.FILTER_KCT_CHECKLIST.filter(function (k) {
+          return k.letter === btn.getAttribute('data-kct-letter');
+        })[0];
+        if (!item) { return; }
+        var draft = Store.getState().filter.draft;
+        if (isKctSelected(draft, item)) {
+          removeKctFromDraft(draft, item);
+          applyKctNaming(draft);
+          Store.setFilterDraft(draft);
+          Store.addMessage('已移除 KCT 條件「' + item.label + '」。', 'info');
+        } else {
+          addKctToDraft(draft, item);
+          applyKctNaming(draft);
+          Store.setFilterDraft(draft);
+          Store.addMessage('已加入 KCT 條件「' + item.label + '」。', 'info');
+        }
       });
     });
 
@@ -556,10 +873,22 @@
       });
     });
 
-    container.querySelectorAll('[data-group-join]').forEach(function (select) {
-      select.addEventListener('change', function () {
+    // 分段控制：群組組合器（group-combinator：把該群組內所有規則 join 設為一致值＝符合全部/任一）
+    // 與群組間連接器（group-join：此群組與前一組以 AND/OR 連接）。點按設值後重建以更新 .is-on。
+    container.querySelectorAll('[data-segmented]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var kind = btn.getAttribute('data-segmented');
+        var gi = Number(btn.getAttribute('data-index'));
+        var value = btn.getAttribute('data-value');
         var draft = Store.getState().filter.draft;
-        draft.groups[Number(select.getAttribute('data-group-join'))].join = select.value;
+        var group = draft.groups[gi];
+        if (!group) { return; }
+        if (kind === 'group-join') {
+          group.join = value;
+        } else if (kind === 'group-combinator') {
+          group.rules.forEach(function (r) { r.join = value; });
+        }
+        Store.setFilterDraft(draft);
       });
     });
 
@@ -577,7 +906,9 @@
         control.addEventListener('change', function () {
           var key = control.getAttribute('data-rule-bind');
           if (key === 'type') {
-            // 型別切換是結構變動：重設該型別的預設欄位並重建列。
+            // 型別切換是結構變動：以 newFilterRule 重建該列、只保留 join。良性副作用：fresh 不帶
+            // __kctLetter，故此列若原是某 KCT 卡帶入的，改型別後即自然解除身分——picker 會自動取消
+            // 該卡已選（isKctSelected 找不到帶該字母標記的 rule）。無需特別處理；重建即不殘留舊標記。
             var draft = Store.getState().filter.draft;
             var fresh = Ui.newFilterRule(control.value);
             fresh.join = draft.groups[gi].rules[ri].join;
@@ -597,7 +928,8 @@
       var draft = Store.getState().filter.draft;
 
       Ui.run('預覽篩選情境', function () {
-        return global.JetApi.filterPreview({ scenario: draft }).then(function (data) {
+        // 送出剝除標記後的 wire 形狀（draft 內 KCT rule 帶 __kctLetter，絕不可外洩）。
+        return global.JetApi.filterPreview({ scenario: toWireScenario(draft) }).then(function (data) {
           Store.setFilterPreview(data.scenario);
           Store.addMessage('情境預覽：命中 ' + data.scenario.count + ' 筆／' +
             data.scenario.voucherCount + ' 張傳票。', 'info');
@@ -609,9 +941,10 @@
       if (!scenarioGate(container)) { return; }
       var current = Store.getState().filter;
 
-      var scenarios = current.savedScenarios.map(function (s) {
-        return { name: s.name, rationale: s.rationale, groups: s.groups };
-      }).concat([current.draft]);
+      // 已存情境 + 當前草稿都過同一投影（深拷貝剝除 __kctLetter，wire 只 { name, rationale, groups }）。
+      // 存入 savedScenarios 的也是這份剝乾淨的形狀，故後續惰性預覽其 groups 不含任何 UI-only 標記。
+      var scenarios = current.savedScenarios.map(toWireScenario)
+        .concat([toWireScenario(current.draft)]);
 
       if (scenarios.length > 10) {
         Store.addMessage('最多保存 10 個篩選情境；請先移除既有情境。', 'warn');
@@ -649,8 +982,9 @@
 
         preview.textContent = '載入中…';
         Ui.run('預覽已儲存情境', function () {
+          // savedScenarios 保存時即經 toWireScenario 剝乾淨；此處再過一次同一投影，保證送出形狀一致。
           return global.JetApi.filterPreview({
-            scenario: { name: scenario.name, rationale: scenario.rationale, groups: scenario.groups }
+            scenario: toWireScenario(scenario)
           }).then(function (data) {
             var s = data.scenario;
             var rows = s.previewRows.slice(0, 10);
@@ -695,7 +1029,7 @@
         var index = Number(btn.getAttribute('data-index'));
         var remaining = Store.getState().filter.savedScenarios
           .filter(function (_, i) { return i !== index; })
-          .map(function (s) { return { name: s.name, rationale: s.rationale, groups: s.groups }; });
+          .map(toWireScenario);
 
         Ui.run('移除篩選情境', function () {
           return global.JetApi.filterCommit({ scenarios: remaining }).then(function () {
@@ -831,10 +1165,11 @@
       return global.JetApi.projectLoadDemo({}).then(function (demo) {
         demoScenario = demo.demoScenario;
         Store.setFilterDraft(JSON.parse(JSON.stringify(demoScenario)));
-        return global.JetApi.filterPreview({ scenario: demoScenario });
+        // demoScenario 來自後端，本就無 __kctLetter；仍過 toWireScenario 與其餘送出點一致（單一投影）。
+        return global.JetApi.filterPreview({ scenario: toWireScenario(demoScenario) });
       }).then(function (data) {
         Store.setFilterPreview(data.scenario);
-        return global.JetApi.filterCommit({ scenarios: [demoScenario] });
+        return global.JetApi.filterCommit({ scenarios: [toWireScenario(demoScenario)] });
       }).then(function (commit) {
         Store.setSavedScenarios([demoScenario]);
         var preview = Store.getState().filter.preview;

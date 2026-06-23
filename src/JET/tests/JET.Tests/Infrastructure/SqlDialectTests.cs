@@ -32,24 +32,69 @@ public sealed class SqlDialectTests
         Assert.Equal(expected, actual);
     }
 
+    // 週末述詞:非工作日以 .NET DayOfWeek 編碼(週日=0…週六=6)。預設 {0,6} 須完全重現舊行為(golden-master)。
     [Fact]
-    public void WeekendPredicate_SqliteDateExpression_ReturnsStrftimePredicate()
+    public void WeekendPredicate_SqliteDefaultSatSun_ReturnsStrftimeInZeroSix()
     {
         ISqlDialect dialect = SqliteDialect.Instance;
 
-        var actual = dialect.WeekendPredicate("gl.posting_date");
+        var actual = dialect.WeekendPredicate("gl.posting_date", new[] { 0, 6 });
 
         Assert.Equal("strftime('%w', gl.posting_date) IN ('0','6')", actual);
     }
 
+    // 中東式週五、週六放假:canonical {5,6} → strftime 同碼。
     [Fact]
-    public void WeekendPredicate_SqlServerDateExpression_ReturnsDateFirstIndependentPredicate()
+    public void WeekendPredicate_SqliteFridaySaturday_ReturnsStrftimeInFiveSix()
+    {
+        ISqlDialect dialect = SqliteDialect.Instance;
+
+        var actual = dialect.WeekendPredicate("gl.posting_date", new[] { 5, 6 });
+
+        Assert.Equal("strftime('%w', gl.posting_date) IN ('5','6')", actual);
+    }
+
+    // 邊界:空集合 → 恆偽(週末規則無命中)。
+    [Fact]
+    public void WeekendPredicate_SqliteEmpty_ReturnsAlwaysFalse()
+    {
+        ISqlDialect dialect = SqliteDialect.Instance;
+
+        var actual = dialect.WeekendPredicate("gl.posting_date", System.Array.Empty<int>());
+
+        Assert.Equal("0 = 1", actual);
+    }
+
+    // SQL Server 錨點編碼:canonical d → (d+6)%7。預設 {0,6} → {6,5} 排序後 (5, 6),重現舊行為。
+    [Fact]
+    public void WeekendPredicate_SqlServerDefaultSatSun_ReturnsDateDiffInFiveSix()
     {
         ISqlDialect dialect = SqlServerDialect.Instance;
 
-        var actual = dialect.WeekendPredicate("gl.posting_date");
+        var actual = dialect.WeekendPredicate("gl.posting_date", new[] { 0, 6 });
 
         Assert.Equal("(DATEDIFF(day, '19000101', CONVERT(date, gl.posting_date)) % 7) IN (5, 6)", actual);
+    }
+
+    // canonical {5,6}(週五、週六)→ {(5+6)%7,(6+6)%7} = {4,5} 排序後 (4, 5)。
+    [Fact]
+    public void WeekendPredicate_SqlServerFridaySaturday_ReturnsDateDiffInFourFive()
+    {
+        ISqlDialect dialect = SqlServerDialect.Instance;
+
+        var actual = dialect.WeekendPredicate("gl.posting_date", new[] { 5, 6 });
+
+        Assert.Equal("(DATEDIFF(day, '19000101', CONVERT(date, gl.posting_date)) % 7) IN (4, 5)", actual);
+    }
+
+    [Fact]
+    public void WeekendPredicate_SqlServerEmpty_ReturnsAlwaysFalse()
+    {
+        ISqlDialect dialect = SqlServerDialect.Instance;
+
+        var actual = dialect.WeekendPredicate("gl.posting_date", System.Array.Empty<int>());
+
+        Assert.Equal("0 = 1", actual);
     }
 
     [Fact]

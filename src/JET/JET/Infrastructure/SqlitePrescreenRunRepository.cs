@@ -68,11 +68,11 @@ public sealed class SqlitePrescreenRunRepository(JetProjectDatabase database, IL
 
         var weekendPostingCount = await CountWhereAsync(
             connection, cancellationToken,
-            _ => Predicates.Weekend("post_date"));
+            _ => Predicates.Weekend("post_date", input.NonWorkingDays));
         long? weekendApprovalCount = input.HasApprovalDate
             ? await CountWhereAsync(
                 connection, cancellationToken,
-                _ => Predicates.Weekend("approval_date"))
+                _ => Predicates.Weekend("approval_date", input.NonWorkingDays))
             : null;
 
         long holidayPostingCount = 0;

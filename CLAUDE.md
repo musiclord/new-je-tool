@@ -2,11 +2,11 @@
 
 Read `AGENTS.md` first. It is the cross-agent map for this repository.
 
-For JET frontend design work, also read `.claude/skills/minimalist-ui/SKILL.md`. JET 介面以它為準,優先於通用的 `frontend-design` 外掛 skill。
+For JET frontend design work, also read `.claude/skills/minimalist-ui/SKILL.md`。JET 介面一律以這份 skill 為準，它的優先序高於通用的 `frontend-design` 外掛 skill。
 
 For test work (writing, modifying, or reviewing anything under `src/JET/tests/`, or planning test coverage), also read `.claude/skills/jet-testing/SKILL.md`.
 
-For development-loop work in `src/JET` (build, test, runtime debugging, or any feature/bugfix work), also read `.claude/skills/jet-dev-loop/SKILL.md`. 它編排「建置→測試→執行時偵錯」閉環並指向各既有權威,不另立規則。
+For development-loop work in `src/JET` (build, test, runtime debugging, or any feature/bugfix work), also read `.claude/skills/jet-dev-loop/SKILL.md`。這份 skill 把「建置 → 測試 → 執行時偵錯」串成一個閉環，並指向既有的各份權威文件，它本身不另立新規則。
 
 Hard boundaries:
 

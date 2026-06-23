@@ -11,7 +11,13 @@ public enum DataPreviewDataset
     GlEntries,
     TbBalances,
     AccountMappings,
-    AuthorizedPreparers
+    AuthorizedPreparers,
+
+    /// <summary>DATE_DIMENSION：事務所假日／補班日（staging_calendar_raw_day）。</summary>
+    DateDimension,
+
+    /// <summary>資料庫結構總覽：由 <see cref="JetSchemaCatalog"/> metadata 驅動，非任何資料表的列資料。</summary>
+    SchemaOverview
 }
 
 public static class DataPreviewDatasetNames
@@ -37,6 +43,12 @@ public static class DataPreviewDatasetNames
                 return true;
             case "authorizedPreparers":
                 dataset = DataPreviewDataset.AuthorizedPreparers;
+                return true;
+            case "dateDimension":
+                dataset = DataPreviewDataset.DateDimension;
+                return true;
+            case "schemaOverview":
+                dataset = DataPreviewDataset.SchemaOverview;
                 return true;
             default:
                 dataset = default;

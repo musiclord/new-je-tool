@@ -18,7 +18,6 @@ public sealed class ProjectLoadDemoHandler : IApplicationActionHandler
                 projectCode = data.ProjectCode,
                 entityName = data.EntityName,
                 operatorId = data.OperatorId,
-                industry = data.Industry,
                 periodStart = data.PeriodStart,
                 periodEnd = data.PeriodEnd,
                 lastPeriodStart = data.LastPeriodStart

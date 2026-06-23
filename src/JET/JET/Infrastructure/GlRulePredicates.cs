@@ -76,6 +76,58 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// </summary>
     public string AccountPair(DbCommand command, string pairMode, string? debitCategory, string? creditCategory)
     {
+        var side = CategorySides(command, debitCategory, creditCategory);
+
+        return pairMode switch
+        {
+            AccountPairModes.Exact =>
+                $"({side.DocHasDebitSide()} AND {side.DocHasCreditSide()} AND ({side.RowIsDebitSide()} OR {side.RowIsCreditSide()}))",
+            AccountPairModes.DebitAnchor =>
+                $"({side.DocHasDebitSide()} AND ({side.RowIsDebitSide()} OR g.amount_scaled < 0))",
+            AccountPairModes.CreditAnchor =>
+                $"({side.DocHasCreditSide()} AND ({side.RowIsCreditSide()} OR g.amount_scaled >= 0))",
+            _ => throw new InvalidOperationException($"未處理的配對模式 {pairMode}。")
+        };
+    }
+
+    /// <summary>
+    /// 考量特殊科目類別配對（special_account_category_pair）：顯式雙類別 + 否定。
+    /// A = 借方類別、B = 貸方類別，借貸側判定與 §6.1 一致（`amount_scaled >= 0` 借方、`&lt; 0` 貸方）。
+    /// 否定模式以 NOT EXISTS（即 NOT DocHasCreditSide(B) / NOT DocHasDebitSide(A)）藏在述詞內，
+    /// 不洩漏到呼叫端：
+    ///   drAndCr → 傳票同時有 A 借與 B 貸；tag「A 借 或 B 貸」的列。
+    ///   drNotCr → 傳票有 A 借、且無任何 B 貸；tag「A 借」的列。
+    ///   notDrCr → 傳票有 B 貸、且無任何 A 借；tag「B 貸」的列。
+    /// 取捨（顯式陳述）：drAndCr 的 SQL 與 AccountPair 的 exact 模式邏輯重疊，但這是不同的
+    /// 使用者面向條件（不同的模式標籤與否定語意），重複是刻意的——共用的是四個側別 closure，
+    /// 而非條件本身。ANSI 共通（EXISTS / NOT EXISTS，全參數綁定），SQLite 與 SQL Server 由構造等價。
+    /// </summary>
+    public string SpecialAccountCategoryPair(
+        DbCommand command, string pairMode, string? debitCategory, string? creditCategory)
+    {
+        var side = CategorySides(command, debitCategory, creditCategory);
+
+        return pairMode switch
+        {
+            SpecialAccountCategoryPairModes.DrAndCr =>
+                $"({side.DocHasDebitSide()} AND {side.DocHasCreditSide()} AND ({side.RowIsDebitSide()} OR {side.RowIsCreditSide()}))",
+            SpecialAccountCategoryPairModes.DrNotCr =>
+                $"({side.DocHasDebitSide()} AND NOT {side.DocHasCreditSide()} AND {side.RowIsDebitSide()})",
+            SpecialAccountCategoryPairModes.NotDrCr =>
+                $"({side.DocHasCreditSide()} AND NOT {side.DocHasDebitSide()} AND {side.RowIsCreditSide()})",
+            _ => throw new InvalidOperationException($"未處理的特殊科目類別配對模式 {pairMode}。")
+        };
+    }
+
+    /// <summary>
+    /// 借方類別 A / 貸方類別 B 的四個側別片段（AccountPair 與 SpecialAccountCategoryPair 共用）。
+    /// RowIs* 判定「本列 g」是否為該類別該側；DocHas* 判定「同傳票」是否存在該類別該側
+    /// （否定模式對 DocHas* 取 NOT EXISTS）。各 closure 每次呼叫綁一個參數，呼叫順序即參數順序。
+    /// 抽出共用片段以消滅重複，但兩個述詞各自決定如何組合（含否定），故對外 SQL 行為互不影響。
+    /// </summary>
+    private CategorySidePredicates CategorySides(
+        DbCommand command, string? debitCategory, string? creditCategory)
+    {
         // 分類值正準化後才綁參數（DB 落地為正準大小寫；驗證已保證可正規化）。
         if (AccountMappingCategories.TryNormalize(debitCategory, out var canonicalDebit))
         {
@@ -121,17 +173,16 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
                       AND c.amount_scaled < 0)
             """;
 
-        return pairMode switch
-        {
-            AccountPairModes.Exact =>
-                $"({DocHasDebitSide()} AND {DocHasCreditSide()} AND ({RowIsDebitSide()} OR {RowIsCreditSide()}))",
-            AccountPairModes.DebitAnchor =>
-                $"({DocHasDebitSide()} AND ({RowIsDebitSide()} OR g.amount_scaled < 0))",
-            AccountPairModes.CreditAnchor =>
-                $"({DocHasCreditSide()} AND ({RowIsCreditSide()} OR g.amount_scaled >= 0))",
-            _ => throw new InvalidOperationException($"未處理的配對模式 {pairMode}。")
-        };
+        return new CategorySidePredicates(
+            RowIsDebitSide, RowIsCreditSide, DocHasDebitSide, DocHasCreditSide);
     }
+
+    /// <summary>四個側別片段建構器（借/貸 × 本列/同傳票）；呼叫時才綁參數。</summary>
+    private sealed record CategorySidePredicates(
+        Func<string> RowIsDebitSide,
+        Func<string> RowIsCreditSide,
+        Func<string> DocHasDebitSide,
+        Func<string> DocHasCreditSide);
 
     /// <summary>
     /// 期內/期外（period_in_out，guide §6.2）：post_date 是否落在會計期間（含邊界）。
@@ -147,10 +198,10 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     }
 
     /// <summary>週末過帳/核准（weekend_*）：週六/週日且非補班日。dateColumn 僅接受本層常數。</summary>
-    public string Weekend(string dateColumn)
+    public string Weekend(string dateColumn, IReadOnlyList<int>? nonWorkingDays)
     {
         return $"""
-            ({dialect.WeekendPredicate($"g.{dateColumn}")}
+            ({dialect.WeekendPredicate($"g.{dateColumn}", NonWorkingDays.Resolve(nonWorkingDays))}
              AND NOT EXISTS (
                  SELECT 1 FROM staging_calendar_raw_day d
                  WHERE d.day_type = 'makeup' AND d.date = g.{dateColumn}))
@@ -274,6 +325,109 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
         var p = NextParam(command, isManual ? 1 : 0);
         return $"g.is_manual = {p}";
     }
+
+    /// <summary>
+    /// 季末前借記收入(revenue_debit_near_quarter_end,KCT 清單 A):科目分類 = Revenue 且借方側
+    /// (amount_scaled >= 0),且 post_date 落在任一季底視窗內。視窗由 Domain QuarterEndWindows 算出,
+    /// 邊界參數綁定。視窗為空(X 非法或與期間無交集)→ 零命中。需科目配對已匯入。ANSI 共通。
+    /// </summary>
+    public string RevenueDebitNearQuarterEnd(
+        DbCommand command, IReadOnlyList<QuarterEndWindows.Window> windows)
+    {
+        if (windows.Count == 0)
+        {
+            return "1 = 0";
+        }
+
+        var revenue = NextParam(command, AccountMappingCategories.Revenue);
+        var windowClauses = string.Join(" OR ", windows.Select(w =>
+            $"(g.post_date >= {NextParam(command, w.FromIso)} AND g.post_date <= {NextParam(command, w.ToIso)})"));
+
+        return $"""
+            (EXISTS (SELECT 1 FROM target_account_mapping m
+                     WHERE m.account_code = g.account_code AND m.standardized_category = {revenue})
+             AND g.amount_scaled >= 0
+             AND ({windowClauses}))
+            """;
+    }
+
+    /// <summary>
+    /// 收入無一般對方科目(revenue_without_normal_counterpart,KCT 清單 C):本列為 Revenue 貸方
+    /// (amount_scaled &lt; 0),但其所在傳票無任何「借方側(amount_scaled >= 0)且分類 ∈
+    /// {Receivables, Receipt in advance}」的分錄(不含 Cash)——unexpected_account_pair 的否定面。
+    /// ANSI 共通(EXISTS + NOT EXISTS)。需科目配對已匯入。
+    /// </summary>
+    public string RevenueWithoutNormalCounterpart(DbCommand command)
+    {
+        var revenue = NextParam(command, AccountMappingCategories.Revenue);
+        var receivables = NextParam(command, AccountMappingCategories.Receivables);
+        var receiptInAdvance = NextParam(command, AccountMappingCategories.ReceiptInAdvance);
+
+        return $"""
+            (EXISTS (SELECT 1 FROM target_account_mapping m
+                     WHERE m.account_code = g.account_code AND m.standardized_category = {revenue})
+             AND g.amount_scaled < 0
+             AND NOT EXISTS (
+                 SELECT 1 FROM target_gl_entry d
+                 JOIN target_account_mapping md ON md.account_code = d.account_code
+                 WHERE d.document_number = g.document_number
+                   AND d.amount_scaled >= 0
+                   AND md.standardized_category IN ({receivables}, {receiptInAdvance})))
+            """;
+    }
+
+    /// <summary>
+    /// 收入之人工分錄(manual_revenue_entry,KCT 清單 D):科目分類 = Revenue 且 is_manual = 1
+    /// (來源未提供人工旗標的列為 NULL,永不匹配,同 manualAuto)。需科目配對已匯入。ANSI 共通。
+    /// </summary>
+    public string ManualRevenueEntry(DbCommand command)
+    {
+        var revenue = NextParam(command, AccountMappingCategories.Revenue);
+        return $"""
+            (EXISTS (SELECT 1 FROM target_account_mapping m
+                     WHERE m.account_code = g.account_code AND m.standardized_category = {revenue})
+             AND g.is_manual = 1)
+            """;
+    }
+
+    /// <summary>
+    /// 特定金額尾數(trailing_digits,KCT 清單 H):顯示金額主單位整數(ABS(amount_scaled) / scale,
+    /// 整數除法捨小數)的末 k 位等於任一指定尾數樣態(amount_scaled &lt;> 0)。每組樣態長度 k →
+    /// 模數 10^k;整數除法 / 與取模 % 皆 ANSI,雙 provider 等價。樣態已由 validator 保證為純數字。
+    /// </summary>
+    public string TrailingDigits(DbCommand command, IReadOnlyList<string> patterns, int moneyScale)
+    {
+        var scale = NextParam(command, (long)moneyScale);
+
+        var clauses = patterns
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p =>
+            {
+                var trimmed = p.Trim();
+                var tenK = 1L;
+                for (var i = 0; i < trimmed.Length; i++)
+                {
+                    tenK *= 10;
+                }
+
+                var modulus = NextParam(command, tenK);
+                var tail = NextParam(command, long.Parse(trimmed));
+                return $"(g.amount_scaled <> 0 AND (ABS(g.amount_scaled) / {scale}) % {modulus} = {tail})";
+            })
+            .ToList();
+
+        return clauses.Count == 0 ? "1 = 0" : $"({string.Join(" OR ", clauses)})";
+    }
+
+    /// <summary>
+    /// 編製與核准同一人(preparer_equals_approver,KCT 清單 J):created_by 與 approved_by 皆非空白
+    /// 且(忽略大小寫與前後空白)相等。createBy/approveBy 未配對時對應欄為 NULL,零命中。
+    /// 純 ANSI 欄位比較,雙 provider 相同。
+    /// </summary>
+    public string PreparerEqualsApprover() =>
+        "(g.created_by IS NOT NULL AND TRIM(g.created_by) <> '' " +
+        "AND g.approved_by IS NOT NULL " +
+        "AND UPPER(TRIM(g.created_by)) = UPPER(TRIM(g.approved_by)))";
 
     private string TextContainsAny(
         DbCommand command, string columnExpr, IReadOnlyList<string> keywords)

@@ -568,6 +568,77 @@ public sealed class FilterHandlersTests(DemoProjectFixture fixture) : IClassFixt
         Assert.Equal(recount, preview.GetProperty("scenario").GetProperty("count").GetInt64());
     }
 
+    /* ---- 考量特殊科目類別配對（specialAccountCategoryPair）的 wire 端到端 --- */
+
+    [Fact]
+    public async Task FilterPreview_SpecialAccountCategoryPairDrAndCr_WithMapping_MatchesRecount()
+    {
+        // 科目配對已匯入（共用 fixture）→ 放行。A = Receivables 借、B = Revenue 貸：demo 的
+        // R3 種子傳票即「應收借（1131）＋ 收入貸（4101）」同傳票（DemoDataFactory），保證母體非空。
+        // drAndCr 命中數須等於同述詞的獨立 recount（標記 Receivables 借「或」Revenue 貸的列）。
+        var preview = await fixture.Host.DispatchAsync("filter.preview", PreviewPayload(ValidScenario(
+            new { join = "AND", type = "specialAccountCategoryPair", pairMode = "drAndCr", debitCategory = "Receivables", creditCategory = "Revenue" })));
+
+        var recount = await DemoProjectPipeline.QueryScalarAsync(
+            fixture.Host, fixture.ProjectId,
+            """
+            SELECT COUNT(*) FROM target_gl_entry g
+            WHERE EXISTS (SELECT 1 FROM target_gl_entry d
+                          JOIN target_account_mapping md ON md.account_code = d.account_code
+                          WHERE d.document_number = g.document_number
+                            AND md.standardized_category = 'Receivables' AND d.amount_scaled >= 0)
+              AND EXISTS (SELECT 1 FROM target_gl_entry c
+                          JOIN target_account_mapping mc ON mc.account_code = c.account_code
+                          WHERE c.document_number = g.document_number
+                            AND mc.standardized_category = 'Revenue' AND c.amount_scaled < 0)
+              AND ((EXISTS (SELECT 1 FROM target_account_mapping m
+                            WHERE m.account_code = g.account_code AND m.standardized_category = 'Receivables')
+                    AND g.amount_scaled >= 0)
+                   OR (EXISTS (SELECT 1 FROM target_account_mapping m
+                              WHERE m.account_code = g.account_code AND m.standardized_category = 'Revenue')
+                       AND g.amount_scaled < 0));
+            """);
+
+        Assert.True(recount > 0, "demo R3 種子應有 Receivables 借 + Revenue 貸的傳票");
+        Assert.Equal(recount, preview.GetProperty("scenario").GetProperty("count").GetInt64());
+    }
+
+    [Fact]
+    public async Task FilterPreview_SpecialAccountCategoryPairWithoutAccountMapping_ThrowsInvalidScenario()
+    {
+        // 閘控：科目配對未匯入時三模式皆須被擋下（invalid_scenario）。自建 host 關閉科目配對匯入。
+        using var host = new HandlerTestHost();
+        await DemoProjectPipeline.SetupAsync(host, importAccountMapping: false);
+
+        var ex = await Assert.ThrowsAsync<JetActionException>(() => host.DispatchAsync(
+            "filter.preview", PreviewPayload(ValidScenario(
+                new { join = "AND", type = "specialAccountCategoryPair", pairMode = "drAndCr", debitCategory = "Cash", creditCategory = "Revenue" }))));
+
+        Assert.Equal("invalid_scenario", ex.Code);
+    }
+
+    [Fact]
+    public async Task FilterPreview_SpecialAccountCategoryPairNonWhitelistCategory_ThrowsInvalidScenario()
+    {
+        // 分類不在白名單（共用 fixture 已匯入科目配對 → 僅分類越界觸發）。
+        var ex = await Assert.ThrowsAsync<JetActionException>(() => fixture.Host.DispatchAsync(
+            "filter.preview", PreviewPayload(ValidScenario(
+                new { join = "AND", type = "specialAccountCategoryPair", pairMode = "drAndCr", debitCategory = "NotACategory", creditCategory = "Revenue" }))));
+
+        Assert.Equal("invalid_scenario", ex.Code);
+    }
+
+    [Fact]
+    public async Task FilterPreview_SpecialAccountCategoryPairIllegalPairMode_ThrowsInvalidScenario()
+    {
+        // 非法 pairMode（沿用 accountPair 的模式名 exact 也屬非法——兩條件模式集合刻意分離）。
+        var ex = await Assert.ThrowsAsync<JetActionException>(() => fixture.Host.DispatchAsync(
+            "filter.preview", PreviewPayload(ValidScenario(
+                new { join = "AND", type = "specialAccountCategoryPair", pairMode = "exact", debitCategory = "Cash", creditCategory = "Revenue" }))));
+
+        Assert.Equal("invalid_scenario", ex.Code);
+    }
+
     [Fact]
     public async Task FilterPreview_MissingScenario_ThrowsInvalidPayload()
     {
@@ -608,5 +679,142 @@ public sealed class FilterHandlersTests(DemoProjectFixture fixture) : IClassFixt
         Assert.Equal("invalid_payload", ex.Code);
     }
 
+    /* ---- KCT 小組條件（清單 A/C/D/H/J）的 wire 端到端 --------------------- */
 
+    [Fact]
+    public async Task FilterPreview_TrailingDigits_MatchesControlledHits()
+    {
+        // 清單 H 端到端（型別字串解析 + keywords 承載尾數樣態 + 述詞執行）；尾數無需科目配對。
+        // MoneyScale 預設 10000：1,999,999.00 主單位整數 1,999,999 尾數 999999；500.00 不符。
+        using var host = new HandlerTestHost();
+        await InlineWorkbookProject.SetupAsync(host, builder => builder
+            .WithColumns("傳票號碼", "傳票日期", "科目代號", "科目名稱", "摘要", "金額", "借方旗標")
+            .AddRow("JV-1", "2025-03-05", "5101", "其他", "尾數九", "1999999.00", 1)
+            .AddRow("JV-1", "2025-03-05", "1101", "現金", "尾數九", "1999999.00", 0)
+            .AddRow("JV-2", "2025-03-06", "5101", "其他", "一般金額", "500.00", 1)
+            .AddRow("JV-2", "2025-03-06", "1101", "現金", "一般金額", "500.00", 0));
+
+        var preview = await host.DispatchAsync("filter.preview", PreviewPayload(ValidScenario(
+            new { join = "AND", type = "trailingDigits", keywords = "999999" })));
+
+        var scenario = preview.GetProperty("scenario");
+        Assert.Equal(2, scenario.GetProperty("count").GetInt64());        // JV-1 兩列（借/貸絕對值皆 1,999,999）
+        Assert.Equal(1, scenario.GetProperty("voucherCount").GetInt64()); // 一張傳票
+    }
+
+    [Theory]
+    [InlineData("revenueWithoutNormalCounterpart")]
+    [InlineData("manualRevenueEntry")]
+    [InlineData("preparerEqualsApprover")]
+    public async Task FilterPreview_KctParameterlessType_RunsEndToEnd(string type)
+    {
+        // 證明型別字串解析 → 驗證放行 → 述詞執行整條 wire（共用 fixture 已匯入科目配對）。
+        // 正確性由 KctFilterPredicateTests 的固定 fixture 身分斷言把關；此處只驗 wire 不丟例外。
+        var preview = await fixture.Host.DispatchAsync("filter.preview", PreviewPayload(ValidScenario(
+            new { join = "AND", type })));
+
+        Assert.True(preview.GetProperty("scenario").GetProperty("count").GetInt64() >= 0);
+    }
+
+    [Fact]
+    public async Task FilterPreview_RevenueDebitNearQuarterEnd_WithoutAccountMapping_ThrowsInvalidScenario()
+    {
+        // 清單 A 閘控：科目配對未匯入時 validator 必須擋下（自建 host 關閉科目配對匯入）。
+        using var host = new HandlerTestHost();
+        await DemoProjectPipeline.SetupAsync(host, importAccountMapping: false);
+
+        var ex = await Assert.ThrowsAsync<JetActionException>(() => host.DispatchAsync(
+            "filter.preview", PreviewPayload(ValidScenario(
+                new { join = "AND", type = "revenueDebitNearQuarterEnd", windowDays = 5 }))));
+
+        Assert.Equal("invalid_scenario", ex.Code);
+    }
+
+    [Fact]
+    public async Task FilterPreview_RevenueDebitNearQuarterEnd_WindowDaysOutOfRange_ThrowsInvalidScenario()
+    {
+        // 科目配對已匯入（共用 fixture）→ 僅 windowDays=0 越界觸發 invalid_scenario。
+        var ex = await Assert.ThrowsAsync<JetActionException>(() => fixture.Host.DispatchAsync(
+            "filter.preview", PreviewPayload(ValidScenario(
+                new { join = "AND", type = "revenueDebitNearQuarterEnd", windowDays = 0 }))));
+
+        Assert.Equal("invalid_scenario", ex.Code);
+    }
+
+    [Fact]
+    public async Task FilterPreview_TrailingDigits_NonDigitPattern_ThrowsInvalidScenario()
+    {
+        var ex = await Assert.ThrowsAsync<JetActionException>(() => fixture.Host.DispatchAsync(
+            "filter.preview", PreviewPayload(ValidScenario(
+                new { join = "AND", type = "trailingDigits", keywords = "12ab" }))));
+
+        Assert.Equal("invalid_scenario", ex.Code);
+    }
+
+    /* ---- KCT 來源情境豁免名稱/動機必填（manifest scenario.source）-------- */
+
+    // KCT 來源、名稱與動機皆留空、內含一條無前置條件的 KCT 規則（清單 J：編製＝核准）。
+    private static object KctScenario(params object[] rules) => new
+    {
+        source = "kct",
+        name = "",
+        rationale = "",
+        groups = new object[] { new { join = "AND", rules } }
+    };
+
+    [Fact]
+    public async Task FilterPreview_KctSourceWithEmptyNameAndRationale_IsAccepted()
+    {
+        // source:"kct" 豁免名稱/動機必填——即便兩者皆空也不應擲 invalid_scenario。
+        // preparerEqualsApprover 無前置條件，能在共用 fixture 上直接 wire-through。
+        var preview = await fixture.Host.DispatchAsync("filter.preview", PreviewPayload(KctScenario(
+            new { join = "AND", type = "preparerEqualsApprover" })));
+
+        // 放行的證明：拿到 scenario response 且 count 可算（≥ 0），未走 invalid_scenario。
+        Assert.True(preview.GetProperty("scenario").GetProperty("count").GetInt64() >= 0);
+    }
+
+    [Fact]
+    public async Task FilterPreview_NonKctSourceWithEmptyNameAndRationale_ThrowsInvalidScenario()
+    {
+        // 回歸：未標 source（查核員自擬）且名稱/動機皆空時，必填檢查仍須擋下。
+        var payload = PreviewPayload(new
+        {
+            name = "",
+            rationale = "",
+            groups = new object[]
+            {
+                new { join = "AND", rules = new object[] { new { join = "AND", type = "preparerEqualsApprover" } } }
+            }
+        });
+
+        var ex = await Assert.ThrowsAsync<JetActionException>(
+            () => fixture.Host.DispatchAsync("filter.preview", payload));
+
+        Assert.Equal("invalid_scenario", ex.Code);
+    }
+
+    [Fact]
+    public async Task FilterCommit_KctSourceWithEmptyNameAndRationale_PersistsNonEmptyAuditTrail()
+    {
+        // 落地替補：KCT 來源、名稱/動機留空 → commit 後 project.load 回傳的情境
+        // 名稱與動機皆為非空（config_filter_scenario.name/.rationale NOT NULL 的留痕不變量）。
+        using var host = new HandlerTestHost();
+        var context = await DemoProjectPipeline.SetupAsync(host);
+
+        await host.DispatchAsync("filter.commit", JsonSerializer.Serialize(new
+        {
+            scenarios = new object[] { KctScenario(new { join = "AND", type = "preparerEqualsApprover" }) }
+        }));
+
+        var loaded = await host.DispatchAsync(
+            "project.load", JsonSerializer.Serialize(new { projectId = context.ProjectId }));
+
+        var scenarios = loaded.GetProperty("filterScenarios");
+        Assert.Equal(1, scenarios.GetArrayLength());
+        Assert.False(string.IsNullOrWhiteSpace(scenarios[0].GetProperty("name").GetString()),
+            "KCT 留痕名稱不得為空");
+        Assert.False(string.IsNullOrWhiteSpace(scenarios[0].GetProperty("rationale").GetString()),
+            "KCT 留痕動機不得為空");
+    }
 }

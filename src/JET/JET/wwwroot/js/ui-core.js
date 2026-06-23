@@ -67,17 +67,68 @@
     { value: 'manualAuto', label: '人工/自動', group: 'nature' },
     { value: 'customTrailingZeros', label: '自訂尾數位數', group: 'pattern' },
     { value: 'accountPair', label: '科目配對分析', group: 'pattern', requiresAccountMapping: true },
+    { value: 'specialAccountCategoryPair', label: '考量特殊科目類別配對', group: 'pattern', requiresAccountMapping: true },
     { value: 'customPreparerEntryCount', label: '自訂編製人員張數', group: 'pattern' },
-    { value: 'customAccountEntryCount', label: '自訂科目張數', group: 'pattern' }
+    { value: 'customAccountEntryCount', label: '自訂科目張數', group: 'pattern' },
+    // KCT 小組條件（清單 A/C/D/H/J；分組獨立於其他四組）。requiresAccountMapping 者需科目配對已匯入。
+    { value: 'revenueDebitNearQuarterEnd', label: '季末前借記收入', group: 'kct', requiresAccountMapping: true },
+    { value: 'revenueWithoutNormalCounterpart', label: '收入無一般對方科目', group: 'kct', requiresAccountMapping: true },
+    { value: 'manualRevenueEntry', label: '收入之人工分錄', group: 'kct', requiresAccountMapping: true },
+    { value: 'trailingDigits', label: '特定金額尾數', group: 'kct' },
+    { value: 'preparerEqualsApprover', label: '編製與核准同一人', group: 'kct' }
   ];
 
   // 條件型別的分組（依審計意圖，非資料格式）。顯示順序即此陣列順序；
   // 每組約 3–4 項，讓使用者只看自己要的那一塊（NN/g chunking / progressive disclosure）。
+  // kct 仍保留在此：它是 rule-row 型別下拉的 optgroup（讓 KCT 面板帶入的條件仍可在 query-builder
+  // 內檢視/改型別）；但「快速加入」面板不再渲染 kct 分組（KCT 改由獨立的 FILTER_KCT_CHECKLIST
+  // 面板進入，單一入口），詳見 filter-step.customPickerHtml。
   var FILTER_RULE_GROUPS = [
     { key: 'risk', label: '風險預篩選訊號' },
     { key: 'field', label: '依欄位內容' },
     { key: 'nature', label: '依分錄性質' },
-    { key: 'pattern', label: '進階樣態分析' }
+    { key: 'pattern', label: '進階樣態分析' },
+    { key: 'kct', label: 'KCT條件' }
+  ];
+
+  // KCT 小組「重用既有型別」的預設條件（清單 E/F/G/I）：點按鈕即帶入既有型別的預填規則，
+  // 不另立 wire 型別（避免重複既有述詞，單一事實在後端述詞）。overrides 套在 newFilterRule 之上；
+  // newGroup 為「整組帶入」（非營業日 = weekendPosting OR holidayPosting，自成一組以免 OR 結合錯位）。
+  var FILTER_KCT_PRESETS = [
+    { key: 'kctSpecificPreparer', label: '特定人員建立之分錄',
+      overrides: { type: 'text', field: 'createBy', mode: 'exact' } },
+    { key: 'kctSpecificKeywords', label: '特定摘要',
+      overrides: { type: 'customKeywords' } },
+    { key: 'kctBlankDescription', label: '空白摘要',
+      overrides: { type: 'prescreen', prescreenKey: 'blankDescription' } },
+    { key: 'kctNonBusinessDay', label: '非營業日分錄',
+      newGroup: [
+        { type: 'prescreen', prescreenKey: 'weekendPosting' },
+        { type: 'prescreen', prescreenKey: 'holidayPosting', join: 'OR' }
+      ] }
+  ];
+
+  // KCT 小組方法學檢核清單（A–J）：獨立顯著面板的「單一資料來源」，十顆按鈕由此一份資料驅動，
+  // 而非十段重複 HTML（Linus：讓分支消失而非加 if）。每筆只是「指向既有述詞」的標記：
+  //   kind:'type'   → ref 是既有 FILTER_RULE_TYPES 的 value；點按帶入一條 newFilterRule(ref)。
+  //   kind:'preset' → ref 是既有 FILTER_KCT_PRESETS 的 key；點按沿用該預設（含 newGroup 整組帶入）。
+  //   disabled:true → Phase 2 佔位（B：待 KCT 交付 BS/IS 分類表），只渲染為停用，不實作述詞。
+  // label 為 KCT 清單用語（卡片顯示文字）。每張卡是可複選 toggle：選取即把其規格落地成 rule
+  // 併入草稿、並在每條 rule 打上 __kctLetter 身分標記（UI-only，剝除後才送 wire）；取消即移除帶
+  // 該字母標記的 rule。情境名稱／動機一律必填，無任何 source 特例（已退場 source:'kct' 模型）。
+  // 不在此引入任何新 wire 型別／述詞；A/C/D/H/J 與 E/F/G/I 全部重用既有 type/preset。
+  var FILTER_KCT_CHECKLIST = [
+    { letter: 'A', kind: 'type', ref: 'revenueDebitNearQuarterEnd', label: '在該季度前 X 天借記收入的會計分錄' },
+    { letter: 'B', kind: 'type', ref: null, disabled: true, note: 'Phase 2 · 待 BS/IS',
+      label: '借記固定資產(PPE，不含在建)且貸記費用之分錄' },
+    { letter: 'C', kind: 'type', ref: 'revenueWithoutNormalCounterpart', label: '貸方為收入但借方非一般對方科目之分錄' },
+    { letter: 'D', kind: 'type', ref: 'manualRevenueEntry', label: '收入之人工分錄' },
+    { letter: 'E', kind: 'preset', ref: 'kctSpecificPreparer', label: '特定人員(財務長/執行長/高階主管等)建立之分錄' },
+    { letter: 'F', kind: 'preset', ref: 'kctSpecificKeywords', label: '特定摘要(如迴轉、調整等)' },
+    { letter: 'G', kind: 'preset', ref: 'kctBlankDescription', label: '空白摘要' },
+    { letter: 'H', kind: 'type', ref: 'trailingDigits', label: '特定尾數(如 999999/000000 結尾)' },
+    { letter: 'I', kind: 'preset', ref: 'kctNonBusinessDay', label: '非營業日之分錄' },
+    { letter: 'J', kind: 'type', ref: 'preparerEqualsApprover', label: '編製人員與核准人員相同' }
   ];
 
   // 預篩選 row-tag 鍵與中文名（guide §4 命名登錄表；代號已退役，一律用具體名稱）。
@@ -110,6 +161,15 @@
     { value: 'exact', label: '精確配對（借＋貸同傳票）' },
     { value: 'debitAnchor', label: '借方錨定（看對方科目）' },
     { value: 'creditAnchor', label: '貸方錨定（看對方科目）' }
+  ];
+
+  // 特殊科目類別配對三模式（manifest specialAccountCategoryPair；A=借方類別、B=貸方類別）。
+  // 三模式皆需 A 與 B 皆填（否定模式同樣需要 B/A 才能判定「不存在」），與 accountPair 的
+  // 錨定模式不同——故各 case 一律呈現借/貸兩個 categorySelect。標籤明確標示 Dr/Cr 與否定語意。
+  var SPECIAL_PAIR_MODE_OPTIONS = [
+    { value: 'drAndCr', label: 'Dr A、Cr B（借A貸B）' },
+    { value: 'drNotCr', label: 'Dr A、Cr 非 B（借A、貸方無B）' },
+    { value: 'notDrCr', label: 'Dr 非 A、Cr B（貸B、借方無A）' }
   ];
 
   var TEXT_MODE_OPTIONS = [
@@ -538,18 +598,24 @@
       type: type,
       prescreenKey: 'suspiciousKeywords',
       field: type === 'dateRange' ? 'postDate' : (type === 'numRange' ? 'amount' : 'description'),
-      keywords: '',
+      // 只有 trailingDigits（KCT 條件 H · 特定金額尾數）有預設值：H 要求選取後即帶 000000；
+      // 其餘型別無「預設尾數」語意，故維持空字串由使用者自填。
+      keywords: type === 'trailingDigits' ? '000000' : '',
       mode: 'contains',
       from: '',
       to: '',
       drCr: 'debit',
       isManual: 'true',
-      pairMode: 'exact',
+      // pairMode 的合法取值依型別而異：accountPair 為 exact/debitAnchor/creditAnchor，
+      // specialAccountCategoryPair 為 drAndCr/drNotCr/notDrCr。型別切換經此重建（filter-step
+      // 的 type-change handler），故各型別取自己模式集的預設，不會殘留另一型別的 pairMode。
+      pairMode: type === 'specialAccountCategoryPair' ? 'drAndCr' : 'exact',
       debitCategory: 'Receivables',
       creditCategory: 'Revenue',
       inPeriod: 'true',
       digits: '3',
-      maxEntries: (type === 'customPreparerEntryCount' || type === 'customAccountEntryCount') ? '11' : ''
+      maxEntries: (type === 'customPreparerEntryCount' || type === 'customAccountEntryCount') ? '11' : '',
+      windowDays: ''
     };
   }
 
@@ -639,9 +705,12 @@
     TB_MODES: TB_MODES,
     FILTER_RULE_TYPES: FILTER_RULE_TYPES,
     FILTER_RULE_GROUPS: FILTER_RULE_GROUPS,
+    FILTER_KCT_PRESETS: FILTER_KCT_PRESETS,
+    FILTER_KCT_CHECKLIST: FILTER_KCT_CHECKLIST,
     PRESCREEN_KEY_OPTIONS: PRESCREEN_KEY_OPTIONS,
     ACCOUNT_CATEGORY_OPTIONS: ACCOUNT_CATEGORY_OPTIONS,
     ACCOUNT_PAIR_MODE_OPTIONS: ACCOUNT_PAIR_MODE_OPTIONS,
+    SPECIAL_PAIR_MODE_OPTIONS: SPECIAL_PAIR_MODE_OPTIONS,
     TEXT_MODE_OPTIONS: TEXT_MODE_OPTIONS,
     FILTER_TEXT_FIELDS: FILTER_TEXT_FIELDS,
     FILTER_DATE_FIELDS: FILTER_DATE_FIELDS,

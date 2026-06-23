@@ -7,7 +7,8 @@ description: Clean editorial-style interfaces. Warm monochrome palette, typograp
 
 ## 1. Protocol Overview
 Name: Premium Utilitarian Minimalism & Editorial UI
-Description: An advanced frontend engineering directive for generating highly refined, ultra-minimalist, "document-style" web interfaces analogous to top-tier workspace platforms. This protocol strictly enforces a high-contrast warm monochrome palette, bespoke typographic hierarchies, meticulous structural macro-whitespace, bento-grid layouts, and an ultra-flat component architecture with deliberate muted pastel accents. It actively rejects standard generic SaaS design trends.
+
+Description: This is a frontend engineering directive for building highly refined, ultra-minimalist, "document-style" web interfaces, in the spirit of top-tier workspace platforms. It enforces several things strictly: a high-contrast warm monochrome palette, bespoke typographic hierarchies, deliberate structural macro-whitespace, bento-grid layouts, and an ultra-flat component architecture accented with muted pastels. It actively rejects the generic look of standard SaaS design.
 
 ## 2. Absolute Negative Constraints (Banned Elements)
 The AI must strictly avoid the following generic web development defaults:

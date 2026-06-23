@@ -1,12 +1,12 @@
 # Journal Entry Testing (JET)
 
-審計用的**日記帳分錄測試**工具 — 依 ISA 240 / ISA 330 對管理階層凌駕控制風險進行全母體分錄篩選。
+這是一套審計用的日記帳分錄測試（Journal Entry Testing，JET）工具。它依 ISA 240 與 ISA 330 兩號審計準則，針對「管理階層凌駕控制」這項風險，對整個母體的分錄做篩選，而不是抽樣。
 
 **技術棧**：`.NET 10 + WinForms + WebView2 + HTML/CSS/JS + SQLite + SQL Server`
 
-**深度文件**：所有業務規則、系統架構、資料策略與 AI 協作指南都在 [`docs/jet-guide.md`](docs/jet-guide.md)。**寫程式前讀這個。**
+**深度文件**：所有業務規則、系統架構、資料策略與 AI 協作指南都集中在 [`docs/jet-guide.md`](docs/jet-guide.md) 這一份文件裡。動手寫程式之前請先讀它。
 
-**Agent 入口**：跨工具的 AI 上下文索引在 [`AGENTS.md`](AGENTS.md)，Claude Code 入口在 [`CLAUDE.md`](CLAUDE.md)，Copilot repository 指引在 [`.github/copilot-instructions.md`](.github/copilot-instructions.md)，前後端契約總表在 [`docs/action-contract-manifest.md`](docs/action-contract-manifest.md)。
+**Agent 入口**：跨工具共用的 AI 上下文索引在 [`AGENTS.md`](AGENTS.md)。各工具另有自己的入口：Claude Code 看 [`CLAUDE.md`](CLAUDE.md)，Copilot 的 repository 指引在 [`.github/copilot-instructions.md`](.github/copilot-instructions.md)。前後端之間的契約總表則在 [`docs/action-contract-manifest.md`](docs/action-contract-manifest.md)。
 
 ---
 
@@ -49,7 +49,7 @@ je-testing/
 2. 確認已安裝 **.NET 10 SDK** 與 **Windows Desktop / WinForms** workload
 3. `dotnet build src/JET/JET.slnx` 或在 VS 直接 F5
 
-> `Form1` 應維持極薄 host，只負責 WinForms 視窗、WebView2 生命週期與 Bridge 初始化。實作邊界見 [`docs/jet-guide.md` §14](docs/jet-guide.md#14-專案結構規劃)。
+> `Form1` 必須維持成一個極薄的宿主（host），只負責三件事：管理 WinForms 視窗、管理 WebView2 的生命週期，以及初始化 Bridge。業務邏輯不進 `Form1`。實作邊界見 [`docs/jet-guide.md` §14](docs/jet-guide.md#14-專案結構規劃)。
 
 ### 開發環境建議
 
@@ -62,11 +62,11 @@ je-testing/
 
 ## 技術定位
 
-正式系統以 **.NET 10 + WinForms + WebView2 + HTML/CSS/JS + SQLite + SQL Server** 重新構建。
+正式系統以 **.NET 10 + WinForms + WebView2 + HTML/CSS/JS + SQLite + SQL Server** 全新構建。
 
-舊 IDEA / VBA / Access 內容集中在 [`legacy/`](legacy/)，只作規則語意與欄位對照，不作為新系統的實作來源。
+上一代系統用 IDEA、VBA 與 Access 寫成，那些內容現在集中歸檔在 [`legacy/`](legacy/)。保留它們只是為了對照規則語意與欄位定義，不能拿來當新系統的實作藍本。
 
-技術約束、排除選項與架構決策細節見 [`docs/jet-guide.md` §9-10](docs/jet-guide.md#9-技術約束與排除選項)。
+技術約束、被排除的技術選項，以及架構決策的細節，都在 [`docs/jet-guide.md` §9-10](docs/jet-guide.md#9-技術約束與排除選項)。
 
 ---
 
@@ -83,10 +83,10 @@ HTML 前端 ─action+payload→ Thin Bridge ─dispatch→ Application (CQRS)
                            SqliteGlRepository                 SqlServerGlRepository
 ```
 
-- **Thin-Bridge Action-Dispatcher**：前後端之間只傳 JSON，邏輯不夾在 Bridge 裡
-- **Application CQRS**：Commands (變更) 與 Queries (讀取) 分離；每條規則一個 Handler
-- **Clean Core**：Domain 無 I/O 依賴；Infrastructure 實作 Domain 介面
-- **雙 Provider**：SQLite 與 SQL Server 共用同一 `IGlRepository` 介面，執行期依設定切換；SQLite 是本機 provider，SQL Server 是 large-data provider
+- **Thin-Bridge Action-Dispatcher**：前後端之間只傳 JSON。Bridge 本身不放任何業務邏輯，它只負責把 action 分派出去。
+- **Application 層採 CQRS（命令查詢職責分離）**：把「會改資料的命令（Command）」和「只讀資料的查詢（Query）」分開；每一條審計規則對應一個 Handler。
+- **Clean Core（乾淨核心）**：Domain 層不依賴任何 I/O；由 Infrastructure 層去實作 Domain 定義的介面。
+- **雙 Provider（兩套資料庫實作）**：SQLite 與 SQL Server 共用同一個 `IGlRepository` 介面，執行期再依設定決定用哪一套。SQLite 是本機用的 provider，SQL Server 則是處理大資料量時用的 provider。
 
 詳見 [`docs/jet-guide.md` §11-13](docs/jet-guide.md#11-架構總覽)。
 
@@ -94,10 +94,10 @@ HTML 前端 ─action+payload→ Thin Bridge ─dispatch→ Application (CQRS)
 
 ## 核心原則
 
-1. 業務邏輯不進 `Form1` — Host 極薄
-2. 前端只送 `action + payload`，不拼 SQL
-3. 每條規則一個 Command/Query + Handler，不做大函式
-4. Repository 介面只有一份，Provider 兩份，方言差異在 Infrastructure 處理
-5. AI 可自由改 UI 外觀，但**不可改** action 契約 / fixed binding ID / Designer.cs
-6. 所有使用者輸入走參數化查詢，拒絕字串拼接 SQL
-7. 寫程式前讀 [`docs/jet-guide.md`](docs/jet-guide.md)；別回頭翻 11,000 行的 `legacy/ideascript.bas`
+1. 業務邏輯不進 `Form1`，宿主層維持極薄。
+2. 前端只送出 `action + payload`，前端不自己拼 SQL。
+3. 每一條規則對應一個 Command 或 Query 加一個 Handler，不要寫成一個大函式。
+4. Repository 介面只有一份，Provider 有兩份；兩種資料庫的方言差異一律在 Infrastructure 層吸收。
+5. AI 可以自由更動 UI 外觀，但不可以改動 action 契約、固定的 binding ID，或 Designer.cs。
+6. 所有使用者輸入一律走參數化查詢，禁止用字串拼接 SQL。
+7. 寫程式前先讀 [`docs/jet-guide.md`](docs/jet-guide.md)，不要回頭去翻那份 11,000 行的 `legacy/ideascript.bas`。

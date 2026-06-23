@@ -12,8 +12,9 @@ public interface ISqlDialect
     /// <summary>第 index 個參數的佔位名（如 @p0）。</summary>
     string ParameterName(int index);
 
-    /// <summary>dateExpr 落在週六/週日的述詞片段（不含補班日排除——那是 ANSI EXISTS）。</summary>
-    string WeekendPredicate(string dateExpr);
+    /// <summary>dateExpr 落在設定之非工作日(週幾,.NET DayOfWeek 編碼集合:週日=0…週六=6)的述詞片段
+    /// （不含補班日排除——那是 ANSI EXISTS；空集合 → 恆偽 "0 = 1"）。</summary>
+    string WeekendPredicate(string dateExpr, IReadOnlyCollection<int> nonWorkingDays);
 
     /// <summary>columnExpr 不分大小寫包含 parameterName 參數值（NULL 以空字串參與）。</summary>
     string ContainsIgnoreCase(string columnExpr, string parameterName);
@@ -29,8 +30,17 @@ public sealed class SqliteDialect : ISqlDialect
 
     public string ParameterName(int index) => $"@p{index}";
 
-    public string WeekendPredicate(string dateExpr) =>
-        $"strftime('%w', {dateExpr}) IN ('0','6')";
+    public string WeekendPredicate(string dateExpr, IReadOnlyCollection<int> nonWorkingDays)
+    {
+        if (nonWorkingDays.Count == 0)
+        {
+            return "0 = 1";
+        }
+
+        // strftime('%w') 與 .NET DayOfWeek 同編碼(週日=0…週六=6),直接列出。
+        var list = string.Join(",", nonWorkingDays.OrderBy(d => d).Select(d => $"'{d}'"));
+        return $"strftime('%w', {dateExpr}) IN ({list})";
+    }
 
     public string ContainsIgnoreCase(string columnExpr, string parameterName) =>
         $"instr(UPPER(COALESCE({columnExpr}, '')), {parameterName}) > 0";
@@ -49,8 +59,18 @@ public sealed class SqlServerDialect : ISqlDialect
 
     public string ParameterName(int index) => $"@p{index}";
 
-    public string WeekendPredicate(string dateExpr) =>
-        $"(DATEDIFF(day, '19000101', CONVERT(date, {dateExpr})) % 7) IN (5, 6)";
+    public string WeekendPredicate(string dateExpr, IReadOnlyCollection<int> nonWorkingDays)
+    {
+        if (nonWorkingDays.Count == 0)
+        {
+            return "0 = 1";
+        }
+
+        // 錨點(1900-01-01,週一)起天數模 7:週一=0…週六=5、週日=6。
+        // canonical(.NET DayOfWeek,週日=0…週六=6)→ 此編碼為 (d + 6) % 7。
+        var list = string.Join(", ", nonWorkingDays.Select(d => (d + 6) % 7).OrderBy(m => m));
+        return $"(DATEDIFF(day, '19000101', CONVERT(date, {dateExpr})) % 7) IN ({list})";
+    }
 
     public string ContainsIgnoreCase(string columnExpr, string parameterName) =>
         $"CHARINDEX({parameterName}, UPPER(COALESCE({columnExpr}, N''))) > 0";

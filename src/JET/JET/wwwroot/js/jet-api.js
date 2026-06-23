@@ -120,6 +120,7 @@
     'import.makeupDay',
     'import.holiday.fromFile',
     'import.makeupDay.fromFile',
+    'calendar.setNonWorkingDays',
     'mapping.autoSuggest',
     'mapping.commit.gl',
     'mapping.commit.tb',

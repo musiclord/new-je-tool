@@ -52,7 +52,8 @@ public sealed class FilterPreviewHandler(
                 document.MoneyScale,
                 document.LastAccountingPeriodDate,
                 document.PeriodStart,
-                document.PeriodEnd),
+                document.PeriodEnd,
+                document.NonWorkingDays),
             cancellationToken);
 
         var scale = document.MoneyScale;
@@ -134,18 +135,22 @@ public sealed class FilterCommitHandler(
                 HasAccountMapping: hasAccountMapping,
                 HasAuthorizedPreparers: hasAuthorizedPreparers));
 
-            if (!seenNames.Add(spec.Name))
+            // 留痕替補唯一收斂點：KCT 來源豁免名稱/動機必填，但 config_filter_scenario.name/.rationale
+            // NOT NULL，故落地前補上穩定非空值。去重與持久化都用替補後的有效名稱，保持兩者一致。
+            var (persistName, persistRationale) = FilterScenarioSources.ResolvePersistable(spec);
+
+            if (!seenNames.Add(persistName))
             {
                 throw new JetActionException(
                     JetErrorCodes.InvalidScenario,
-                    $"情境名稱重複：「{spec.Name}」。");
+                    $"情境名稱重複：「{persistName}」。");
             }
 
             var position = saved.Count + 1;
             saved.Add(new SavedFilterScenario(
                 position,
-                spec.Name,
-                spec.Rationale,
+                persistName,
+                persistRationale,
                 scenarioElement.GetRawText(),
                 savedUtc));
             materializable.Add(new MaterializableScenario(position, spec));
@@ -162,7 +167,8 @@ public sealed class FilterCommitHandler(
                 document.MoneyScale,
                 document.LastAccountingPeriodDate,
                 document.PeriodStart,
-                document.PeriodEnd),
+                document.PeriodEnd,
+                document.NonWorkingDays),
             cancellationToken);
 
         if (saved.Count > 0)

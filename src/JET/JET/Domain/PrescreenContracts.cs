@@ -16,7 +16,8 @@ public sealed record PrescreenRunInput(
     bool HasHolidays,
     bool RunUnexpectedAccountPair,
     bool HasAuthorizedPreparers,
-    int MoneyScale);
+    int MoneyScale,
+    IReadOnlyList<int>? NonWorkingDays = null);
 
 public sealed record CreatorSummaryRow(
     string CreatedBy,

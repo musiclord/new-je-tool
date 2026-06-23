@@ -281,6 +281,69 @@ public sealed class QueryDataPreviewHandlerTests
     }
 
     [Fact]
+    public async Task Preview_DateDimension_ReturnsImportedDaysWithCanonicalColumns()
+    {
+        using var host = new HandlerTestHost();
+        var context = await DemoProjectPipeline.SetupAsync(host);
+
+        var data = await host.DispatchAsync("query.dataPreview", """{ "dataset": "dateDimension" }""");
+
+        Assert.Equal("dateDimension", data.GetProperty("dataset").GetString());
+        Assert.Equal(["date", "dayType", "dayName"],
+            data.GetProperty("columns").EnumerateArray().Select(c => c.GetString()).ToList());
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("stats").ValueKind);
+
+        // oracle：獨立 recount staging_calendar_raw_day（demo 假日 + 補班日）。
+        var expected = await DemoProjectPipeline.QueryScalarAsync(
+            host, context.ProjectId, "SELECT COUNT(*) FROM staging_calendar_raw_day;");
+        Assert.True(expected > 0);
+        Assert.Equal(expected, data.GetProperty("totalCount").GetInt64());
+
+        // dayType cell 為原值（holiday/makeup），中文化屬前端顯示層。
+        var rows = data.GetProperty("rows").EnumerateArray().Select(r => r[1].GetString()).ToList();
+        Assert.All(rows, t => Assert.Contains(t, new[] { "holiday", "makeup" }));
+    }
+
+    [Fact]
+    public async Task Preview_DateDimension_EmptyReturnsZeroCount()
+    {
+        using var host = new HandlerTestHost();
+        await host.DispatchAsync("project.create", CreatePayload);
+
+        var data = await host.DispatchAsync("query.dataPreview", """{ "dataset": "dateDimension" }""");
+
+        Assert.Equal(0, data.GetProperty("totalCount").GetInt64());
+        Assert.Equal(0, data.GetProperty("columns").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("stats").ValueKind);
+    }
+
+    [Fact]
+    public async Task Preview_SchemaOverview_ListsCatalogExposedEntriesWithoutImportingData()
+    {
+        // schemaOverview 由 catalog 驅動：剛建專案、未匯入任何資料也恆有列。
+        using var host = new HandlerTestHost();
+        await host.DispatchAsync("project.create", CreatePayload);
+
+        var data = await host.DispatchAsync("query.dataPreview", """{ "dataset": "schemaOverview" }""");
+
+        Assert.Equal("schemaOverview", data.GetProperty("dataset").GetString());
+        Assert.Equal(["canonicalName", "physicalName", "layer", "audience", "browsable"],
+            data.GetProperty("columns").EnumerateArray().Select(c => c.GetString()).ToList());
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("stats").ValueKind);
+
+        var expected = JetSchemaCatalog.All
+            .Count(e => e.Audience is SchemaAudience.DataView or SchemaAudience.StructureOnly);
+        Assert.Equal(expected, data.GetProperty("totalCount").GetInt64());
+        Assert.Equal(expected, data.GetProperty("rows").GetArrayLength());
+
+        // 正準名出現、Hidden 不出現（負向）。
+        var canonicalNames = data.GetProperty("rows").EnumerateArray().Select(r => r[0].GetString()).ToList();
+        Assert.Contains("JE_PBC", canonicalNames);
+        Assert.DoesNotContain("GL_CONTROL_TOTAL", canonicalNames);
+        Assert.DoesNotContain("APP_MESSAGE_LOG", canonicalNames);
+    }
+
+    [Fact]
     public async Task Preview_AuthorizedPreparers_EmptyReturnsZeroCount()
     {
         using var host = new HandlerTestHost();

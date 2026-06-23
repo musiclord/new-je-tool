@@ -29,7 +29,8 @@ public sealed class FilterRunMaterializeService(IFilterRunMaterializer materiali
                 document.MoneyScale,
                 document.LastAccountingPeriodDate,
                 document.PeriodStart,
-                document.PeriodEnd),
+                document.PeriodEnd,
+                document.NonWorkingDays),
             cancellationToken);
     }
 }
