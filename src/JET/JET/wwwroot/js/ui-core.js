@@ -108,6 +108,12 @@
       ] }
   ];
 
+  // 預設群組（newGroup）在彙總區「扁平檢視」呈現為單一原子條件時的白話標籤（以卡的 ref＝preset key 為鍵）。
+  // 目前僅非營業日(I) 為 newGroup（週末 OR 假日）；其餘預設為單規則、不走原子行。
+  var FILTER_KCT_ATOM_LABELS = {
+    kctNonBusinessDay: '非營業日（週末或假日）'
+  };
+
   // KCT 小組方法學檢核清單（A–J）：獨立顯著面板的「單一資料來源」，十顆按鈕由此一份資料驅動，
   // 而非十段重複 HTML（Linus：讓分支消失而非加 if）。每筆只是「指向既有述詞」的標記：
   //   kind:'type'   → ref 是既有 FILTER_RULE_TYPES 的 value；點按帶入一條 newFilterRule(ref)。
@@ -706,6 +712,7 @@
     FILTER_RULE_TYPES: FILTER_RULE_TYPES,
     FILTER_RULE_GROUPS: FILTER_RULE_GROUPS,
     FILTER_KCT_PRESETS: FILTER_KCT_PRESETS,
+    FILTER_KCT_ATOM_LABELS: FILTER_KCT_ATOM_LABELS,
     FILTER_KCT_CHECKLIST: FILTER_KCT_CHECKLIST,
     PRESCREEN_KEY_OPTIONS: PRESCREEN_KEY_OPTIONS,
     ACCOUNT_CATEGORY_OPTIONS: ACCOUNT_CATEGORY_OPTIONS,

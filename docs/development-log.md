@@ -4,6 +4,113 @@
 
 ---
 
+## 2026-06-24 (r12) — Step 4 進階篩選 非營業日(I) 改情境層級獨立區塊＋cscript TDD 循環（破例已還原）
+
+使用者實測 r11 後回報：分出第 3 組（空、作用中）時，點 I 竟「加到第 1 組」、且 I 卡高亮。使用者**破例授權對前端做可測改造**以跑完整 TDD 循環（因手動 GUI 無法回報完整資訊），並要求**確認後還原破例物**。
+
+- **TDD 基建（破例，已還原）**：本機無 `node`，但 **`cscript`（Windows JScript，ES3）可跑**。在 filter-step.js 末加一個 `__JET_TEST__` 守護的 test-export hook（正式環境不執行）；scratchpad 寫 cscript 課程：ES5 shim ＋真 KCT 表 fixture ＋ ADODB.Stream 讀**真正的 filter-step.js** eval ＋ 38 條決策表斷言（mock Ui/Store）。**使用者驗收通過後，hook 已移除、課程已刪、`dotnet build` 仍綠**——破例物全數還原，grep `__JET_TEST__`/`__filterModel` 於 src 歸零。
+- **TDD 揭露的事實**：純狀態邏輯（active 群組、KCT 組層 toggle、命名、移除範圍、wire 剝離）**全部正確**——「I 加到第 1 組」其實是**渲染**騙人（I 的 `__kctPresetGroup` 一直被併入第一塊 well 顯示），AST 從未錯。
+- **非營業日(I) 改情境層級獨立區塊（Option A，使用者選）**：I 結構上是巢狀 OR（週末 OR 假日），後端 `GlFilterWhereBuilder` 組內是 left-fold、無子括號，故 I **無法塞進可編輯 AND 組**，只能自成一組（且 ui-core.js 明令不另立 wire 述詞）。改為：`setsHtml` 不再把 I 併入 well，改 `presetBlockHtml` 渲染成**所有可編輯組下方的獨立「情境層級」黃色區塊**；`toWireScenario` 把預設群組**一律排到最後**（後端 left-fold 才會把 I AND 到整個情境，不受插入順序影響）；`readBackHtml` 末端為「（…可編輯式…） AND 非營業日」；命名 I 為**自己的 token**（解除 r11 折入第一組）→ `G｜H｜I`、`G｜I`；移除 `data-sync-presets`（I 的 join 固定 AND）。
+- **harness 揪出的兩個 bug（皆加測試鎖住）**：(1) `kctScenarioName` r11 折入給 `G+I｜H`，應 `G｜H｜I`（test 8）；(2) I 排序：先加 I 再加組時 wire 須把 I 排最後（test 13）。
+- **使用者回報的兩個 bug（皆加測試）**：(A) **I 卡用組層藍色高亮**而被誤讀為「已加入作用中（空）組」→ 新增純函式 `kctCardState`（`preset`/`selected`/`elsewhere`/`none`），I 改用**黃色「情境層級」狀態**（`.picker-card--preset`），與組層藍色明顯區隔；「已選 N 項」不計入 I（test 15）。(B) **read-back 懸空運算子**（`… OR AND 非營業日`）：空的作用中組被折進布林式 → `readBackHtml` 改**只取有條件的可編輯組**（metamorphic 測試：加一個空組不改變輸出，test 14）。
+- **檔案**：`filter-step.js`（`kctCardState`、`presetBlockHtml`、`setsHtml`/`setWellHtml` 移除 preset 併入與 `data-sync-presets`、`readBackHtml` 過濾空組＋I 為 AND 項、`kctScenarioName` I 自成 token、`toWireScenario` 預設群組排最後、`kctPickerHtml` 用 `kctCardState`）、`app.css`（`.scenario-preset*`、`.picker-card--preset*`；移除死碼 `.scenario-item*`）。純前端、無 `.cs`。
+- **驗證**：**cscript harness 38/38 綠**（決策表 1–13＋read-back 空組 metamorphic＋I 卡狀態），含逐條斷言鎖住值與身分；`dotnet build` 0 警告 0 錯誤；死碼 grep 歸零。**GUI 使用者已驗收通過**。破例物已還原。未 commit。
+
+## 2026-06-24 (r11) — Step 4 進階篩選 非作用中組鎖定＋命名重算修復（決策表自審）
+
+使用者反覆在第 1/2 組切換並取消 KCT 後回報「邏輯順序錯亂」，要求一次完整自我審查＋設計 TDD 循環。**測試現實**：本環境無 JS runtime（`node`/`npm` 不存在），且 `jet-testing` 規範刻意不設前端測試層（測試金字塔 .NET-only）——故無法在此自動跑 JS 測試。經 AskUserQuestion，使用者選「**不新增測試層，改決策表自審＋逐條紙上驗證**」。以 decision table＋state transition（jet-testing §4）把「active × KCT toggle × 命名 × 鎖定」狀態機列成 12 列期望表，逐列實作並紙上驗證。設計 `docs/specs/2026-06-24-filter-group-lock-and-naming-tdd.md`。純前端，無後端/契約變更。
+
+自審找到三個疊加缺陷（錯亂真因）：
+
+- **缺陷 1：非作用中組未鎖定。** `[data-active-target]` handler 為避免奪焦而排除 input/select/button，故點非作用中組的控制項不會設它為作用中，但面板/落點反映作用中組 → 改 A 組、面板卻是 B 組。**修**：`setWellHtml` 對 `multi && group && !isActive` 加 `scenario-set--locked`；CSS 把該組「條件清單與組合器**及其所有後代**」設 `pointer-events:none`（後代預設 auto 會接走點擊，故必須連後代一起 none）＋ `opacity` dim ⇒ 控制項不可互動、點任一處穿透到 well → 設為作用中。〔移除這組〕在組標頭、不在鎖定選擇器內故仍可點。只有作用中組可編輯。
+- **缺陷 2：以 row〔移除〕刪 KCT 條件時名稱不重算**（type-change、remove-set 同）。**修**：新增 `groupHasKct`；remove-rule／type-change 在「被移除/被改的 rule 帶 `__kctLetter`」時才 `applyKctNaming`，remove-set 在「被移除的組含 KCT」時才重算。守則：**只有涉及 KCT 字母的變動才重算**，避免在純自訂情境誤清手改名稱。
+- **缺陷 3：預設(I) 在名稱被當成獨立尾段** `G｜G+J｜I`。**修**：`kctScenarioName` 多組分支把預設字母**併入第一組 token**（I 渲染在第一塊 well、read-back 也 AND 進第一組）、依 checklist 重排去重 → `G+I｜G+J`。
+
+- **檔案**：`filter-step.js`（`setWellHtml` 加 locked class、新增 `groupHasKct`、remove-rule／type-change／remove-set 守恆重算命名、`kctScenarioName` 併預設字母）、`app.css`（`.scenario-set--locked` 清單與組合器連後代 `pointer-events:none`＋dim）。純前端、無 `.cs`。
+- **驗證**：**逐列紙上推演決策表 1–12 皆符**（含：作用中=g2 點高亮 G→g2 去 G 而 g1 不動／row 移除 G→名稱即時 `G+H｜J`／改型別解除 KCT 身分→重算／點鎖定組→只設作用中不改值／移除這組(含KCT)→重算回退／`G+I｜G+J`／純自訂手改名 row 移除不被清／wire 無 UI-only 鍵）；grep 類名/函式兩側成對；`dotnet build` 0 警告 0 錯誤。**鍵盤 tab-in 鎖定屬已知次要限制**（本工具以滑鼠操作為主，pointer-events:none 已解滑鼠誤觸）。**GUI 目視待 Windows**（`windows-handoff.md` 合併卡 A 段第 2 點、C 段第 10 點已改寫並附關鍵驗收）。未 commit。
+
+## 2026-06-24 (r10) — Step 4 進階篩選 KCT 對齊「作用中組」＋組感知命名（解情境層 vs 組層衝突）
+
+使用者實測 r9 後發現深層設計衝突：選 G+H 後分出第 2 組，在第 2 組（作用中）想加 G，系統卻**刪掉第 1 組的 G**；且名稱 `G+H+J` 看不出組別。根因：KCT 是**情境層級**設計（`isKctSelected`/`removeKctFromDraft` 都掃全部組、`kctScenarioName` 全字母排一排），但 r9 後條件落點已是**組層級**（作用中組）——層級不一致即衝突。使用者要求重新釐清操作邏輯並以 UX 優先解決。診斷後以 AskUserQuestion 取得方向：KCT 卡改「跟隨作用中組的 toggle」＋「也在其他組」標記；命名以組分隔 `G+H｜J`。設計 `docs/specs/2026-06-24-filter-kct-group-scoped-design.md`，inline 實作。純前端，無後端/契約變更。
+
+- **KCT 對齊組層級**：新增 `isKctSelectedActive`（卡片高亮：單規則看作用中組是否含該字母；預設(I) 仍看全情境）、`isKctUsedElsewhere`（某單規則 KCT 用於別的非作用中組→卡片加「也在其他組」淡標記，維持全局意識）、`removeKctFromActiveGroup`（取消只從作用中組移除、別組同訊號不動、不丟棄變空的作用中組）、`isPresetNewGroup`（辨識 I 這類自成一組的預設）。KCT 點擊 handler 由 `isKctSelected`（情境層）改 `isKctSelectedActive`（組層），取消分流：單規則→`removeKctFromActiveGroup`、預設(I)→`removeKctFromDraft`（整組）。新增仍沿用 r9 `addKctToDraft`（→作用中組）。切換作用中組時面板（每次 `setFilterDraft` 全重繪）高亮跟著反映。
+- **組感知命名**：`kctScenarioName` 重寫＋新增 `kctLettersInGroup`。單一可編輯組沿用「全部所選字母排一排」（`G+H`、`G+I+J`）；多可編輯組每組字母 `+` 串、組間 `｜` 分隔（只有自訂的組顯「自訂」、全空略過），預設(I) 字母附最後 token——例 `G+H｜J`、跨組 `G+H｜G+J`。動機（`kctScenarioRationale`）維持情境層說明列表（不分組）。
+- **特例**：非營業日(I) 本質是情境層的獨立 OR 群組，卡片 toggle 維持情境層（整組加/移）、不顯「也在其他組」。
+- **檔案**：`filter-step.js`（上述五新函式＋`kctScenarioName` 重寫＋handler 改組層＋`kctPickerHtml` 卡片高亮改 `isKctSelectedActive`/加「也在其他組」/intro 改寫）、`app.css`（`.picker-card--elsewhere` 藍邊無底、`.picker-card__elsewhere` 小字標記）。純前端、無 `.cs`。
+- **驗證**：逐行精讀＋grep 類名/函式兩側成對（新函式皆被引用、`isKctSelected` 仍供 rationale 與單組命名）＋多情境紙上推演（G+H 第1組→＋另一組第2組作用中→G/H 顯「也在其他組」、加 J 亮→**在第2組點 G＝加到第2組、第1組 G 不刪**、名稱 `G+H｜G+J`→切回第1組 G/H 亮、J 顯「也在其他組」、點 G 只從第1組移除／單組仍 `G+H`／G+I+J 仍保留／I 整組加移）；`dotnet build` 0 警告 0 錯誤。**GUI 目視待 Windows**（`windows-handoff.md` 合併卡 A 段第 2 點已改寫並附關鍵驗收）。未 commit。
+
+## 2026-06-24 (r9) — Step 4 進階篩選 作用中（active）群組目標＋提示錯位修復＋自訂面板精簡
+
+使用者實測 r8 後提三點：(1)「特定金額尾數」灰字提示把輸入框頂歪（錯位）；(2)「自訂篩選條件」面板太佔空間，要精簡；(3) 分出第 2 組後**無法回頭把條件加到第 1 組**（KCT/自訂卡都只加到「最後一組」）。對 #3 我先提「逐組『＋ 加條件』」（Airtable 慣例），但使用者點出這會與上方兩塊面板**定位衝突**，並**指定改用「作用中（active）群組」模型**：保留上方面板為唯一新增入口、點選某組設為作用中、新增的條件進作用中組；作用中組要用明顯前端風格做對比。作用中視覺以 AskUserQuestion 採「左側藍軸＋淡藍底＋徽章」。設計 `docs/specs/2026-06-24-filter-active-group-targeting-design.md`，單一作者 inline 實作。純前端，無後端/契約變更。
+
+- **作用中群組模型（取代「永遠加到最後一組」）**：新增 `__active`（UI-only 標記，`toWireScenario` 重建 group 為 `{join,rules}` 自然不外洩，同 `__kctPresetGroup`）。`activeEditableGroup(draft)`＝帶 `__active` 的非預設組→否則回退最後一個非預設組→再無則 null；`setActiveGroup(draft, group)` 清舊標記再標記目標。`addKctToDraft`（單規則 KCT）與自訂 `add-rule` 綁定的落點，由「最後一個非預設群組」改為 `activeEditableGroup`；無可編輯組則新建一組並設作用中。**＋另一組條件**新增後 `setActiveGroup` 設新組為作用中；**移除這組** splice 後 `setActiveGroup(activeEditableGroup)` 回退。
+- **點選設作用中**：multi 可編輯 well 帶 `data-active-target`；點 well 的「中性區域」設作用中，handler 排除 `button/input/select/textarea/label`（避免攔截編輯與重繪奪焦）；已是作用中或預設組則不動。
+- **作用中視覺（使用者選案）**：`.scenario-set--active`＝左側 3px 藍軸（`::before`）＋淡藍底＋藍邊＋組標頭「作用中」徽章（filled pale-blue-ink pill）；其他組 hairline、`cursor:pointer`、hover 邊框轉強、標頭常駐小灰字「點此設為作用中」。**單組不顯示作用中樣式**（最乾淨）；**≥2 組**才出現。≥2 組時情境區頂部一行**全域提示**說明模型。
+- **#1 提示錯位修復**：成因＝`金額尾數為` 那欄 input＋hint 上下堆疊成一欄，放進垂直置中的 `.rule-row` 被整欄置中、input 被頂到上半。修法＝`.rule-field__hint` 改 `position:absolute` 掛在 input 正下方（不撐高該欄），`.rule-row:has(.rule-field__hint)` 預留列底空間 → input 回到與同列控制項置中對齊、hint 乾淨落下不壓下一列（WebView2 Chromium 支援 `:has()`）。
+- **#2 自訂面板精簡**：面板保留（仍是新增入口），`.condition-picker--custom` 範圍內卡片變矮（取消 60px 最小高、單行 label、mark 22→18px）、欄寬 180→150px、群距/內距收斂、說明句縮短並順帶點明「加到作用中的組」。KCT 面板不動。
+- **read-back 即時更新修復**（同輪後續回報）：規則「值編輯」原走 `change`＋`patchFilterRule`（只 `notify` 不重建面板以保住輸入焦點），導致藍色 read-back（整段算好的 HTML）要等下次結構重繪才更新——使用者打了金額值卻沒進「這個情境會找出…」提示。修法：新增 `softRefreshReadback(container)`（只抽換 `.scenario-readback` 一段、不碰任何輸入框，read-back 是條件清單之後的獨立節點故焦點不受影響）；值控制項事件由 `change` 改 `input`＝即時 patch＋即時刷新 read-back（型別 select 仍 `change`＝結構重建走整面重繪）。
+- **檔案**：`filter-step.js`（`activeEditableGroup`/`setActiveGroup`、兩處落點改打作用中組、add-set/remove-set 維護 active、點選啟用綁定、`setWellHtml` 加 `isActive` 參數與徽章/提示/`data-active-target`、`scenarioBuilderHtml` 全域提示、精簡 body 句、`softRefreshReadback` 與值控制項改 `input` 即時刷新 read-back）、`app.css`（`.rule-field`/`__hint` 絕對定位＋`:has` 預留、`.condition-picker--custom`/`.picker-card--custom` 精簡、`.scenario-set--active`/`__badge`/`__hint`/`.scenario-active-hint`）。純前端、無 `.cs`。
+- **驗證**：逐行精讀＋grep 類名兩側成對（`scenario-set--active`/`__badge`/`__hint`/`scenario-active-hint`/`data-active-target` JS/CSS 配對；`__active` 僅 JS、不入 wire）＋多情境紙上推演（fresh→單乾淨 well／＋另一組→新組作用中徽章、第 1 組顯示「點此設為作用中」／點第 1 組→變作用中、KCT/自訂卡新增落到第 1 組／移除作用中組→回退／G+I+J 仍一塊 well／點輸入框不誤切不奪焦／值編輯（金額/日期）即時刷新 read-back 且焦點不被吃／`toWireScenario` 剝除 `__active`）；`dotnet build` 0 警告 0 錯誤。**GUI 目視待 Windows**（`windows-handoff.md` 合併卡 B 段、C 段第 8–11 點已改寫）。未 commit。
+
+## 2026-06-24 (r8) — Step 4 進階篩選 AND/OR 段控與父子層級對比（read-back 改布林式）
+
+使用者實測 r7 統一介面後回饋三點：組間連接器整句 radio「符合任一組即可／需符合所有組」**太吃閱讀成本、不直覺**，要直接選 **AND/OR**；組內「這一組要怎麼搭配？＋radio」同樣改 AND/OR，且要與組間運算子做出**父子層級視覺對比**，讓使用者分得清「設定條件群組」與「設定篩選情境」；下方藍色 read-back（可作底稿邏輯）要把 **AND/OR 寫進去**。依 brainstorming 派三路研究（query builder 的 AND/OR 視覺層級與巢狀、段控 vs radio、巢狀深度的縮排/上色/軌道；來源含 Garofalo UX、LogRocket 視覺層級、UX Movement/Component Gallery/Cieden 段控、react-querybuilder branch 線），收斂後以 AskUserQuestion 兩題（父子呈現＝軌道＋居中藍運算子；read-back＝行內布林式）取得核可。設計 `docs/specs/2026-06-24-filter-andor-segmented-hierarchy-design.md`，單一作者 inline 實作。純前端，無後端/契約變更。
+
+- **兩層組合器都改 AND/OR 段控（`comboSegment`）**：兩格 AND/OR、mono、目前值整格高亮；純 AND/OR、不加冗詞（依「太吃閱讀成本」回饋），白話走 `title` tooltip＋read-back。底層仍是 `<input type=radio>`，**沿用既有 `data-set-combinator`／`data-set-join`／`data-gi`／`data-sync-presets` 與 change 綁定**（值仍 AND/OR），綁定邏輯幾乎不動，只換視覺外殼（研究：段控對 2–4 個對立互斥選項可見度高、最不歧義）。
+- **父子層級對比（一套色彩語意）**：組內運算子＝`combo-seg--group`，**灰階、較小**，靠在「第 N 組」旁（單組時放 well 頂端、前綴 lead「條件之間」）；組間運算子＝`combo-seg--scenario`，**藍色、較大**，置中**跨在水平軌道 `set-rail` 上**、前綴 lead「組間」。**藍色＝情境層**對應下方藍色 read-back，使用者學得起「藍的＝最上層邏輯」（研究：顏色區分 AND/OR 降認知負荷；群組 vs 條件靠縮排＋顏色＋視覺區隔；react-querybuilder 軌道）。
+- **read-back 改行內布林式（鏡像控制項）**：句首白話 lead＋布林式——單組 `A AND B`（1 條件無運算子）；多組 `（G1 式） OR （G2 式）`（單條件組省括號）。OR（情境層）藍粗、AND（組內）灰 mono，與控制項同一套色彩；同時可直接當底稿條件邏輯。
+- **沿用 r7 不變**：AST 兩層 `groups`、`toWireScenario` 過濾空組、預設群組(I) 原子行併第一塊 well、第一塊段控 `data-sync-presets` 連動、組間段控設所有非預設群組 join 一致、教學空狀態、4 拍提示、漸進揭露（≥2 條件才顯示組合器）。
+- **清死碼**：移除 `setComboRadio` 與變死的 `scenarioTopCombinator`；CSS 移除 `.scenario-radio*`／`.set-connector*`／`.scenario-flat__q`／`.scenario-flat__chooser`。grep 確認 wwwroot 全域 `scenario-radio`／`set-connector`／`setComboRadio`／`scenarioTopCombinator` 歸零。
+- **檔案**：`filter-step.js`（新增 `comboSegment`／`exprJoin`；`setWellHtml`／`interSetConnectorHtml`／`readBackHtml` 改寫；移除上述死碼）、`app.css`（新增 `.combo-seg*`／`.combo-row*`／`.set-rail*`／`.expr-op*`；移除死 CSS）。純前端、無 `.cs`。
+- **驗證**：逐行精讀＋grep 兩側成對＋多情境紙上推演（單組 G+H：條件之間灰段控＋布林 read-back／G+I+J 仍一塊 well 且段控同步預設／＋另一組→兩組各灰段控＋組間藍段控軌道／read-back（…）OR（…）／移除回單 well／只選 I 無運算子）；`dotnet build` 0 警告 0 錯誤。**GUI 目視待 Windows**（`windows-handoff.md` 合併卡 C 段第 6/8/9 點已改寫）。未 commit。
+
+## 2026-06-24 (r7) — Step 4 進階篩選 統一條件建構器（單一介面、把分組融入、無模式）
+
+使用者實測 r6 後要求：不要簡易/進階兩套，只保留**一套以簡易檢視為基礎的乾淨介面**，把「條件群組」融入（移除「進階：分組」模式切換鈕），仍要能做 query builder/AST 的 AND/OR 組合，且非專業者第一眼懂流程。依 brainstorming 派三路研究（統一無模式分組 builder、整體流程新手引導、白話巢狀布林；來源含 HubSpot/Airtable/Notion/Mailchimp/Google Ads、NN/g 空狀態與認知負荷、Baymard、react-querybuilder、VQuery），收斂到 **HubSpot 兩層扁平群組模型**；使用者核可（含整句回顯＋4 拍提示兩加分項）。設計 `docs/specs/2026-06-24-filter-unified-condition-builder-design.md`，單一作者 inline 實作。純前端，無後端/契約變更。
+
+- **統一「條件組(set)」模型**：情境＝一個或多個 set，每組就是一塊淡底 well（「符合 全部/任一」整句 radio，該組 ≥2 條件才顯示＋條件清單）。一組時＝乾淨單 well（看不到「組」字）；「＋ 另一組條件」常駐普通按鈕（**非模式**，取代「進階：分組」）；≥2 組時組間白話連接器「符合任一組即可／需符合所有組」（預設任一組 OR，HubSpot 慣例）。封頂兩層、一組一種組合器。
+- **AST 映射不變**：可編輯群組→各一塊 well；預設群組(I)→原子單行併入第一塊 well（故 G+I+J 仍一塊乾淨 well）。每塊 well 的 radio 設該群組 rules join；第一塊另 `data-sync-presets` 同步預設群組 join。組間連接器設所有可編輯群組 join 一致（單一組間運算子，`name` 以 gi 唯一避免 3 組以上撞群）。
+- **防呆**：`toWireScenario` 過濾掉沒有條件的群組（建到一半的空 set 不送、後端不報「群組沒有規則」）；移除 set 到剩一組自動回乾淨單 well（無模式鈕、不被困——解 r6 回不去/報錯）。
+- **新手層**：教學空狀態（指向上方 palette，NN/g 三職責）；整句回顯 read-back（用既有 `ruleSummaryLabel`/`presetAtomLabel` 組白話句，防 and/or 誤選）；4 拍流程輕提示「挑訊號 → 設定數值 → 組合 → 命名保存」。
+- **清死碼**：移除 `segmentedControl` 函式與 `.segmented*`/`.group-connector*`/`.scenario-group*` CSS（進階群組卡/segmented/連接器 pill 整套退場）。grep 確認 `scenario-group`/`group-connector`/`segmented` 全數歸零。
+- **檔案**：`filter-step.js`（`scenarioBuilderHtml` 重構為 `setsHtml`/`setWellHtml`/`interSetConnectorHtml`/`readBackHtml`/`teachingEmptyStateHtml`/`setComboRadio`；`add-set`/`remove-set`/`data-set-combinator`/`data-set-join` 綁定；`toWireScenario` 過濾空組）、`app.css`（set 殼/組標頭/組間連接器/read-back/教學空狀態；移除死 CSS）。純前端、無 `.cs`。
+- **驗證**：逐行精讀＋grep 兩側成對＋多情境紙上推演（G+H 單 well／G+I+J 仍單 well／＋另一組→兩 well＋連接器／移除回單 well／只選 I／3 組連接器 name 不撞）；`dotnet build` 0 警告 0 錯誤。**GUI 目視待 Windows**（`windows-handoff.md` 合併卡 C 段已改寫）。未 commit。
+
+## 2026-06-24 (r6) — Step 4 扁平檢視組合器：白話化＋消除孤兒感
+
+使用者實測 r5 後回報：扁平檢視的「符合〔全部│任一〕下列條件」segmented 切換像「沒人照顧的孤兒」——夾在動機欄與條件清單之間、上下間距相等，非專業者看不出它在控制什麼、也看不懂「全部/任一」要做什麼。使用者要求以 UX/前端設計哲學為據改善。依 brainstorming：先派三路網路研究（組合器文案與控制型別、孤兒控制的視覺歸屬、白話化與漸進揭露），對著截圖提兩案 mock，使用者選 **Approach 2（提問＋整句 radio）**。設計 `docs/specs/2026-06-24-filter-combinator-novice-clarity-design.md`，單一作者 inline 實作。純前端，無後端/契約變更，只改扁平檢視的組合器呈現（AST 與評估語意不變）。
+
+- **同框消除孤兒（common region）**：扁平檢視的組合器＋條件清單放進一個淡色 well（`--color-surface-sunken`，不另加邊框以免與外層 rule-card 巢狀），組合器是 well 的標題、下方 hairline 後緊接清單——控制項「擁有」下面的清單（研究：NN/g common-region/visual-hierarchy/form-white-space、GOV.UK fieldset、8yd 標題間距）。
+- **提問＋整句 radio＋後果**：把 segmented `scenario-combinator` 換成「這些條件要怎麼搭配？」＋兩個整句 radio——「全部都要符合 — 每個條件都成立（結果較少）」「符合任一即可 — 符合一個就好（結果較多）」。對非技術新手最不歧義（研究：NN/g radio、MS Windows radio 指南、Apple Mail 整句、Baymard 後果），不用 AND/OR 術語/on-off 開關/下拉。
+- **漸進揭露**：扁平條件數 <2 時不顯示組合器（一條無從搭配），≥2 才出現（研究：Airtable 第二條才出現、NN/g 漸進揭露）。
+- **不自動查命中數**：研究指即時命中數是最佳教學，但本工具預覽是 SQL 查詢（母體可達百萬列），不採每次切換自動查詢；改用常駐「後果文字」。即時計數留作日後可選增強。
+- **進階檢視不變**：群組卡的 `group-combinator` segmented 與連接器 pill 維持 r4/r5（進階使用者已選複雜度）。
+- **檔案**：`filter-step.js`（`flatScenarioHtml` 重寫、新增 `radioOption`、`[data-segmented]` 只留 group-combinator、新增 `[data-scenario-combinator]` radio 綁定）、`app.css`（`.scenario-flat` well＋chooser＋radio）。純前端、無 `.cs`。
+- **驗證**：逐行精讀＋grep 類名兩側成對（移除的 `scenario-flat__head/__label`、`segmentedControl('scenario-combinator'` 歸零）；`dotnet build` 0 警告 0 錯誤。**GUI 目視待 Windows**（已更新 `windows-handoff.md` 合併卡第 6–7 點）。未 commit。
+
+## 2026-06-24 (r5) — Step 4 彙總區扁平化（符合 全部/任一 條件）＋ 自訂區可折疊
+
+使用者實測 r4 後回報：KCT 多選 **G+I+J** 出現兩個群組＋連接器 pill，且不解「為何 E+H 一組、G+I+J 兩組」——根因是非營業日(I)＝「週末 OR 假日」無法塞進 AND 主群組（群組僅一種組合器），被迫自成 OR 群組、還攤成兩列；兩層 AST 結構漏到 UI 形成上手門檻。依 brainstorming 提兩方向（mock 比較），使用者選 **Approach A（扁平化）**。設計 `docs/specs/2026-06-24-filter-scenario-flatten-and-collapse-design.md`，單一作者 inline 實作。純前端，無後端/契約變更。
+
+- **彙總區「預設扁平、進階才分組」**：可編輯群組（非預設）≤1 → **扁平檢視**＝一個頂層「符合〔全部/任一〕下列條件」切換＋扁平清單；簡單條件用可編輯 rule 列、預設群組（I）以**原子單行**「非營業日（週末或假日）」呈現（不攤成兩列、不顯示群組/連接器）。可編輯群組 ≥2（按「進階：分組」另開）→ **進階檢視**＝r4 群組卡＋連接器 pill；預設群組仍原子單行。
+- **頂層切換語意**：`scenario-combinator` 把所有 `group.join` 與所有「非預設」群組的 rule `join` 設為一致值（預設群組 I 內部 OR 不動）。`scenarioTopCombinator` 由首個有規則的可編輯群組組合器（或連接器）推導，預設 AND。
+- **AST/契約不變**：底層仍兩層 `groups`；命中數與改版前等價。原子行移除＝splice 整個預設群組＋`applyKctNaming`（對應 KCT 卡同步取消）。自訂卡 add-rule 落點改「最後一個非預設群組」（與 `addKctToDraft` 一致，不誤入 I 的 OR 群組）。`toWireScenario` 仍剝 `__kctLetter`；group 層 `__kctPresetGroup` 因重建為 `{join,rules}` 不外洩。
+- **自訂篩選條件可折疊**：改標頭鈕＋hidden body（同 `toggle-matrix` 模式，不動 Store），預設收起；KCT 區塊維持常顯。
+- **檔案**：`filter-step.js`（`scenarioBuilderHtml` 重構為 7 個 helper＋扁平/進階分流；`customPickerHtml` 折疊；`add-rule`/`scenario-combinator`/`remove-preset-group`/`toggle-custom-picker` 綁定）、`ui-core.js`（`FILTER_KCT_ATOM_LABELS`）、`app.css`（扁平清單/原子行/折疊樣式）。純前端、無 `.cs`。
+- **驗證**：無 node、無法自動語法檢查 JS（jet-testing 禁 E2E）——逐行精讀＋grep 類名兩側成對＋落點/切換/移除紙上推演；`dotnet build` 0 警告 0 錯誤。**GUI 目視待 Windows**（`windows-handoff.md` r5 卡，取代 r4 卡第 4–5 點）。未 commit。
+
+## 2026-06-24 (r4) — Step 4 進階篩選 視覺精修（卡片等高、helper text、組合器預設 AND、連接器 pill）
+
+承 r3 Approach B 之後，使用者提供實機截圖回報仍有視覺問題（卡片高度參差、停用卡撐高、提示方式、兩層邏輯難分、動機截斷、整頁偏長），要求本輪以**網路研究**為據、避免臆測。依 superpowers brainstorming → writing-plans 流程：先派三路背景研究（query builder 群組/組合器 UX、先選後設定兩段式版面與避免位移、欄位提示與已儲存情境呈現；來源含 react-querybuilder、Airtable、NN/g、GOV.UK、Cloudscape、Polaris、CSS-Tricks、Modern CSS），對著截圖實況提設計、經使用者核准後**單一作者一致實作**（同 r3 不 fan-out 的理由：高度耦合的視覺系統）。純前端，無後端/契約變更（設計 `docs/specs/2026-06-24-filter-step4-visual-refinement-design.md`、計畫 `docs/superpowers/plans/2026-06-24-filter-step4-visual-refinement.md`）。
+
+- **兩個與先前指示衝突的抉擇（使用者裁定 2026-06-24）**：(1) 欄位範例提示由 r3/req3 的 hover-only `title` 改 **常駐 helper text**（NN/g、GOV.UK：hover-only/`title` 對鍵盤/觸控/報讀器/可發現性不友善，且有預設值時 placeholder 不可用）；(2) KCT 群組組合器預設由 r3 的「任一(OR)」改 **「全部(AND)」**（研究指 AND 為慣例安全預設）。
+- **卡片等高與精簡**：KCT 與自訂卡統一 `min-height` + label 2 行 `line-clamp`（完整文字 `title` hover 補全），解決「卡片長度不一」；停用卡 label 收 1 行使「1 行 label＋註記」與啟用卡 2 行等高、不再撐高頂排。KCT 卡移除冗餘 `picker-card__mark` 欄，選取態改由**字母框反白（實心 ink）**承載（選取仍只改 class，無位移——r3 的位移源 chip 早已移除）。
+- **常駐 helper text**：`trailingDigits`(H) 去 `title` 範例、改輸入框下方常駐「例：999999 或 000000」。為此把 `.rule-row__controls input[type="text"]` 選擇器改**直接子代**，避免巢狀於 `.rule-field` flex 直欄的 input 被 `flex-basis` 誤撐成 180px 高。
+- **組合器預設 AND**：`addKctToDraft` 收掉舊「KCT 預設 OR」特例——單規則 KCT 累積進「最後一個非預設群組」（預設 AND）；非營業日 I 仍自成 OR 群組、與前組連接器改 AND，並打 UI-only `__kctPresetGroup` 標記讓單規則落點略過它（避免 I 後選的單條件被併入 I 的 OR 群組）；標記由 `toWireScenario` 重建 group 為 `{join,rules}` 時自然不外洩。
+- **兩層邏輯視覺區隔**：群組間連接器由 r3 的同款 segmented 改為**軌道上一顆淡藍 pill 切換鈕**「與上一組：AND／OR」，與標頭「符合〔全部│任一〕」segmented 明顯不同款；群組卡加左側 3px 淡藍 accent 細軌標示包含關係。動機 textarea 由 2 列改 4 列；兩選取區塊 padding/margin 收斂降低整頁高度。
+- **檔案**：`wwwroot/js/steps/filter-step.js`、`wwwroot/css/app.css`（`ui-core.js` 無契約變更，未動）。純前端、無 `.cs` 變更。
+- **驗證**：開發環境無 node、無法自動語法檢查 JS，且 jet-testing 硬邊界禁 WinForms/WebView2 E2E——以逐區段精讀＋class 一致性 grep（去除類無孤兒、新類兩側成對）核對；`dotnet build` 0 警告 0 錯誤（後端回歸護欄綠）。**GUI 目視驗收待 Windows 端**（`windows-handoff.md` 2026-06-24 r4 卡，取代 r3 卡第 4 點的組合器預設與連接器呈現）。未 commit（版控待使用者驗收後決定）。
+
 ## 2026-06-23 (r3) — Step 4 進階篩選查詢建構器 UX 重整（Approach B：分組組合器）
 
 承前一輪 Step 4 前端重設計的使用者回報（介面移位、自訂卡 ×N 徽章莫名變動、KCT 命名要求、查詢建構器要現代化）。本輪先依 superpowers brainstorming 流程提設計、經使用者核准 **Approach B** 後，由單一作者一致實作——上一輪把高度耦合的設計拆給多個無共享上下文的 subagent，正是不一致與低品質的根因，故本輪不 fan-out。純前端，無後端/契約變更（設計提案 `docs/specs/2026-06-23-filter-query-builder-ux-redesign-design.md`）。

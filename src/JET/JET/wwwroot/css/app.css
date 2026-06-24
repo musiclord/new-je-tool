@@ -1528,16 +1528,16 @@ kbd {
 /* 選取區塊外殼：兩塊（KCT／自訂）共用同一基底，差異只用修飾類表達（消重，Linus）。
    不用較強外框或頂條——讓「卡片網格」自己成為視覺主體，區塊本身保持平面。 */
 .condition-picker {
-  margin-bottom: 18px;
-  padding: 18px 20px;
+  margin-bottom: 14px;
+  padding: 14px 18px;
   background: var(--color-surface-sunken);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
 }
 
-/* 自訂區塊內含多個分組，分組間自帶間距，故略增底部留白讓最後一組不貼邊。 */
+/* 自訂面板精簡（#2）：整體內距收斂、小一圈（KCT 面板不受影響）。 */
 .condition-picker--custom {
-  padding-bottom: 8px;
+  padding: 10px 14px 6px;
 }
 
 .condition-picker__head {
@@ -1567,7 +1567,7 @@ kbd {
 }
 
 .condition-picker__intro {
-  margin: 0 0 14px;
+  margin: 0 0 10px;
   font-size: 12px;
   line-height: 1.6;
   color: var(--color-muted);
@@ -1575,7 +1575,7 @@ kbd {
 
 /* 自訂區塊的審計分組包裹（重複四次）：小標題在上、卡片網格在下。 */
 .condition-picker__group {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .condition-picker__group-label {
@@ -1619,7 +1619,8 @@ kbd {
   display: grid;
   align-content: start;
   gap: 4px 10px;
-  padding: 12px 14px;
+  min-height: 60px;
+  padding: 10px 14px;
   text-align: left;
   font-family: var(--font-sans);
   color: var(--color-text);
@@ -1659,11 +1660,15 @@ kbd {
   font-size: 13px;
   line-height: 1.45;
   color: var(--color-text);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 /* ---- KCT 卡（toggle）：grid = [mark | letter | label / note]，letter 跨兩行置中 ---- */
 .picker-card--kct {
-  grid-template-columns: 22px 26px 1fr;
+  grid-template-columns: 26px 1fr;
 }
 
 /* 字母索引：方形 mono key（呼應 step-nav__index），跨兩行（label + note）置中於其欄。 */
@@ -1683,12 +1688,12 @@ kbd {
 }
 
 .picker-card--kct .picker-card__label {
-  grid-column: 3;
+  grid-column: 2;
 }
 
 /* 停用原因標註（Phase 2 / 需科目配對未匯入）：小字 mono，置於標籤下方第二行。 */
 .picker-card__note {
-  grid-column: 3;
+  grid-column: 2;
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.04em;
@@ -1708,8 +1713,43 @@ kbd {
   border-color: var(--pale-blue-ink);
 }
 
-.picker-card--selected .picker-card__mark {
+.picker-card--selected .picker-card__letter {
+  color: #fff;
+  background: var(--color-ink);
+}
+
+/* 「也在其他組」：藍邊無底（vs 已選的藍邊＋淡藍底）＋小字標記——該訊號用於別組、但作用中組沒有，
+   維持全局意識而不誤導為「已在作用中組」。 */
+.picker-card--elsewhere {
+  border-color: var(--pale-blue-ink);
+}
+
+.picker-card__elsewhere {
+  grid-column: 2;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
   color: var(--pale-blue-ink);
+}
+
+/* 預設(I) 卡「情境層級·已加入」：pale-yellow 底＋黃邊＋黃字母框＋「情境層級」黃標——與組層藍色高亮明顯
+   區隔，避免被誤讀為「已加入作用中組」（I 是套用到整個情境的條件，不屬於任何一組）。 */
+.picker-card--preset {
+  background: var(--pale-yellow);
+  border-color: var(--pale-yellow-ink);
+}
+
+.picker-card--preset .picker-card__letter {
+  color: #fff;
+  background: var(--pale-yellow-ink);
+}
+
+.picker-card__preset-mark {
+  grid-column: 2;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--pale-yellow-ink);
 }
 
 /* 停用態（B = Phase 2 佔位；或需科目配對未匯入）：降透明、虛線邊、hover 不變、不可點。
@@ -1733,10 +1773,29 @@ kbd {
   background: var(--color-surface-sunken);
 }
 
-/* ---- 自訂卡（加入行為，無已選兩態）：grid = [mark | label] ---- */
+/* 停用卡 label 收為 1 行：與啟用卡 2 行 label 等高（停用卡另有註記行），整列不被撐高。 */
+.picker-card--disabled .picker-card__label {
+  -webkit-line-clamp: 1;
+}
+
+/* ---- 自訂卡（加入行為，無已選兩態）：grid = [mark | label]；精簡為矮、單行、欄較密（#2） ---- */
 .picker-card--custom {
-  grid-template-columns: 22px 1fr;
+  grid-template-columns: 18px 1fr;
   align-items: center;
+  min-height: 0;
+  padding: 7px 10px;
+  gap: 2px 8px;
+}
+
+.picker-card--custom .picker-card__mark {
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
+}
+
+.picker-card--custom .picker-card__label {
+  -webkit-line-clamp: 1;
+  font-size: 12px;
 }
 
 .picker-card--custom:hover {
@@ -1744,70 +1803,367 @@ kbd {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
+/* 自訂面板分組與網格收斂：群距小、欄較窄較密（KCT 不受影響）。 */
+.condition-picker--custom .condition-picker__intro {
+  margin-bottom: 8px;
+}
+
+.condition-picker--custom .condition-picker__group {
+  margin-bottom: 8px;
+}
+
+.condition-picker--custom .condition-picker__group-label {
+  margin-bottom: 4px;
+}
+
+.condition-picker--custom .condition-picker__grid--custom {
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
 /* ---- 建立篩選情境（彙總調整區）------------------------------------------
    套在既有 .rule-card 上的修飾：與上方兩個選取區塊間留足夠 macro whitespace，
    讓「選取 vs 調整」兩階段在視覺上明確分段。 */
 .scenario-builder {
-  margin-top: 28px;
+  margin-top: 22px;
 }
 
-/* ---- 分段控制（segmented）：群組組合器「全部/任一」與群組間連接器「AND/OR」共用 ----
-   一排互斥小按鈕，目前值以 .is-on（實心反白）標示。沿用 minimalist-ui：1px 實線邊、小圓角、
-   無漸層/重陰影。位置固定於群組標頭，切換不造成版面移位。 */
-.segmented {
-  display: inline-flex;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.segmented__btn {
-  padding: 4px 12px;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  color: var(--color-text);
-  background: var(--color-surface);
-  border: none;
-  border-left: 1px solid var(--color-border);
-  cursor: pointer;
-  transition: background-color 160ms var(--ease-soft), color 160ms var(--ease-soft);
-}
-
-.segmented__btn:first-child {
-  border-left: none;
-}
-
-.segmented__btn.is-on {
-  color: #fff;
-  background: var(--color-ink);
-}
-
-.segmented__btn:not(.is-on):hover {
-  background: var(--color-surface-sunken);
-}
-
-.segmented__btn:focus-visible {
-  outline: 2px solid var(--pale-blue-ink);
-  outline-offset: -2px;
-}
-
-/* 群組間連接器：兩個群組卡之間的置中橫列，標出「此組與上一組」是 AND 還是 OR。 */
-.group-connector {
+/* 自訂篩選條件可折疊：標頭一列（caret＋標題＋提示）為一顆全寬鈕，body 預設收起（hidden）。 */
+.condition-picker__toggle {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 10px;
-  margin: 4px 0 12px;
-  padding-left: 2px;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
 }
 
-.group-connector__hint {
+.condition-picker__toggle-caret {
   font-size: 11px;
   color: var(--color-muted);
 }
 
-/* 群組組合器前後綴小字（「符合 … 以下條件」），與分段控制同列。 */
-.scenario-group__combo-label {
+.condition-picker__toggle-hint {
   font-size: 12px;
+  color: var(--color-muted);
+}
+
+.condition-picker__body {
+  margin-top: 10px;
+}
+
+/* 彙總區扁平檢視：條件清單放進一個淡色 well（common region），組合器是 well 的標題、下接清單，
+   消除孤兒感（不另加邊框，避免與外層 rule-card 形成巢狀框）。 */
+.scenario-flat {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+/* 組合器段控（segmented control）：兩格 AND/OR、mono、目前值高亮。取代整句 radio——可見度高、最不歧義。 */
+.combo-seg {
+  display: inline-flex;
+  align-items: stretch;
+  vertical-align: middle;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.combo-seg__opt {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.combo-seg__opt + .combo-seg__opt {
+  border-left: 1px solid var(--color-border);
+}
+
+/* radio 本體隱藏、整格 label 可點；目前值整格高亮（白底＋深字＋加重）。 */
+.combo-seg__opt input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.combo-seg__opt.is-on {
+  background: #fff;
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+/* 組間（父／情境層）段控：藍色、較大，與組內中性段控明顯分層（色彩語意對應下方藍色 read-back）。 */
+.combo-seg--scenario {
+  background: var(--pale-blue);
+  border-color: var(--pale-blue-ink);
+}
+
+.combo-seg--scenario .combo-seg__opt {
+  padding: 5px 16px;
+  font-size: 13px;
+  color: var(--pale-blue-ink);
+}
+
+.combo-seg--scenario .combo-seg__opt + .combo-seg__opt {
+  border-left-color: var(--pale-blue-ink);
+}
+
+.combo-seg--scenario .combo-seg__opt.is-on {
+  background: #fff;
+  color: var(--pale-blue-ink);
+}
+
+/* 單組時的組合器列：白話 lead「條件之間」＋段控，下方 hairline 與條件清單分隔。 */
+.combo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.combo-row__lead {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+/* well 內第一個條件列不畫頂線：有組合器時由 combo-row／組標頭的底線分隔、無組合器時不留孤線。 */
+.scenario-flat__list > :first-child {
+  border-top: none;
+}
+
+/* 多組時的組殼（modifier）：加邊與標頭，與單組的純 well 區分（單組無邊、最乾淨）。 */
+.scenario-set {
+  position: relative;
+  border: 1px solid var(--color-border);
+}
+
+.scenario-set__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.scenario-set__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.scenario-set__remove {
+  margin-left: auto;
+}
+
+/* 非作用中組：可點切換、hover 邊框轉強，提示使用者「可點選此組」。 */
+.scenario-set:not(.scenario-set--active) {
+  cursor: pointer;
+}
+
+.scenario-set:not(.scenario-set--active):hover {
+  border-color: var(--color-border-strong);
+}
+
+/* 作用中（active）條件組：左側 3px 藍軸（::before）＋淡藍底＋藍邊，明顯標示「新條件會加到這組」。 */
+.scenario-set--active {
+  background: var(--pale-blue);
+  border-color: var(--pale-blue-ink);
+}
+
+.scenario-set--active::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: -1px;
+  width: 3px;
+  background: var(--pale-blue-ink);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+/* 作用中徽章：filled pale-blue-ink pill，落在組標頭。 */
+.scenario-set__badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  color: #fff;
+  background: var(--pale-blue-ink);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* 非作用中組的「點此設為作用中」提示：小灰字（整塊 well 可點切換）。 */
+.scenario-set__hint {
+  font-size: 11px;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+/* 鎖定（非作用中）組：條件清單與組合器淡化且不可互動。pointer-events:none 必須同時套到「容器與其所有
+   後代」——否則 input/select/button 後代預設 auto 仍會接走點擊。全部 none ⇒ 點任一處都落到 well（最近的
+   auto 祖先）→ 設為作用中。〔移除這組〕在組標頭、不在此選擇器內，故仍可點；「點此設為作用中」同理。 */
+.scenario-set--locked .scenario-flat__list,
+.scenario-set--locked .combo-seg {
+  opacity: 0.5;
+}
+
+.scenario-set--locked .scenario-flat__list,
+.scenario-set--locked .scenario-flat__list *,
+.scenario-set--locked .combo-seg,
+.scenario-set--locked .combo-seg * {
+  pointer-events: none;
+}
+
+/* 全域提示（≥2 組）：說明作用中模型，淡灰一行、不另上色以免與 read-back 的藍底搶眼。 */
+.scenario-active-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-muted);
+}
+
+/* 條件組之間的連接器：一條水平軌道（spine），lead「組間」＋藍色段控置中跨在線上（父／情境層運算子，
+   與組內中性段控分層）。兩側 hairline 用 ::before/::after 拉出軌道，凸顯「組之間」的跨越感。 */
+.set-rail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.set-rail::before,
+.set-rail::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.set-rail__lead {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--pale-blue-ink);
+}
+
+/* 整句回顯（read-back）：淡藍底一條，白話告訴使用者這個情境到底會抓什麼（防 and/or 誤選）。 */
+.scenario-readback {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--pale-blue-ink);
+  background: var(--pale-blue);
+  border-radius: var(--radius-sm);
+}
+
+.scenario-readback__lead {
+  font-weight: 600;
+}
+
+/* read-back 內的運算子：與控制項同一套色彩語意（OR＝情境層藍粗、AND＝組內中性灰），mono。 */
+.expr-op {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.expr-op--group {
+  color: var(--color-muted);
+}
+
+.expr-op--scenario {
+  color: var(--pale-blue-ink);
+  font-weight: 700;
+}
+
+/* 教學空狀態：指向上方 palette（NN/g 空狀態三職責：狀態＋學習線索＋入口）。 */
+.scenario-empty {
+  margin-bottom: 12px;
+  padding: 18px 16px;
+  text-align: center;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.scenario-empty__title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.scenario-empty__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-muted);
+}
+
+/* 4 拍流程輕提示（挑訊號 → 設定數值 → 組合 → 命名保存）。 */
+.scenario-builder__flow {
+  margin: 0 0 14px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--color-muted);
+}
+
+/* 預設(I) 情境層級獨立區塊：與可編輯組視覺區隔（「情境層級」＝套用到整個情境、AND）。不參與作用中/鎖定。
+   非營業日＝週末 OR 假日，結構上是巢狀 OR，2-level 模型只能自成一組，故呈現為獨立區塊而非某組的條件。 */
+.scenario-preset {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.scenario-preset__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 「情境層級」標籤：pale-yellow pill，與藍色（作用中／情境段控）區隔，標示這是套用到整個情境的條件。 */
+.scenario-preset__tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  color: var(--pale-yellow-ink);
+  background: var(--pale-yellow);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.scenario-preset__label {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.scenario-preset__remove {
+  margin-left: auto;
+}
+
+.scenario-preset__note {
+  margin: 6px 0 0;
+  font-size: 11px;
   color: var(--color-muted);
 }
 
@@ -1819,31 +2175,6 @@ kbd {
   text-align: center;
   border: 1px dashed var(--color-border-strong);
   border-radius: var(--radius-sm);
-}
-
-.scenario-group {
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-}
-
-.scenario-group__head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.scenario-group__title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-ink);
-}
-
-.scenario-group__head .btn {
-  margin-left: auto;
 }
 
 .rule-row {
@@ -1875,9 +2206,38 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
-.rule-row__controls input[type="text"] {
+.rule-row__controls > input[type="text"] {
   flex: 1 1 180px;
   min-width: 140px;
+}
+
+/* 帶範例 helper 的欄位：input 佔位同一條文字輸入；hint 改絕對定位掛在 input 正下方，不再撐高該欄，
+   讓 input 回到與同列控制項置中對齊（修「提示頂歪輸入框」的錯位）。列底空間由下方 :has 規則預留。 */
+.rule-field {
+  position: relative;
+  flex: 1 1 180px;
+  min-width: 140px;
+}
+
+.rule-field input {
+  display: block;
+  width: 100%;
+}
+
+.rule-field__hint {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+/* 只給「有常駐 hint」的條件列預留列底空間，讓絕對定位的 hint 乾淨落在 input 下方、不壓到下一列。 */
+.rule-row:has(.rule-field__hint) {
+  padding-bottom: 24px;
 }
 
 .rule-row__sep {
