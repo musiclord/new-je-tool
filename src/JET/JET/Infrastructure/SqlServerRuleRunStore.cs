@@ -17,12 +17,11 @@ public sealed class SqlServerRuleRunStore(SqlServerProjectDatabase database) : I
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
-            INSERT INTO result_rule_run (run_id, run_kind, generated_utc, summary_json)
+            INSERT INTO {s}.result_rule_run (run_id, run_kind, generated_utc, summary_json)
             VALUES (@runId, @runKind, @generatedUtc, @summaryJson);
-            """;
+            """);
         command.Parameters.AddWithValue("@runId", record.RunId);
         command.Parameters.AddWithValue("@runKind", record.RunKind);
         command.Parameters.AddWithValue("@generatedUtc", record.GeneratedUtc.ToString("O"));
@@ -41,14 +40,13 @@ public sealed class SqlServerRuleRunStore(SqlServerProjectDatabase database) : I
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT TOP 1 run_id, run_kind, generated_utc, summary_json
-            FROM result_rule_run
+            FROM {s}.result_rule_run
             WHERE run_kind = @runKind
             ORDER BY generated_utc DESC, run_id DESC;
-            """;
+            """);
         command.Parameters.AddWithValue("@runKind", runKind);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

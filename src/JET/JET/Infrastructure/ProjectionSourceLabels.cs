@@ -13,14 +13,15 @@ internal static class ProjectionSourceLabels
         DbConnection connection,
         DbTransaction transaction,
         string batchId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string schemaPrefix = "")
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            """
+            $"""
             SELECT source_no, source_file_name, sheet_name
-            FROM import_batch_source
+            FROM {schemaPrefix}import_batch_source
             WHERE batch_id = @batchId
             ORDER BY source_no;
             """;

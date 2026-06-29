@@ -34,37 +34,35 @@ public sealed class SqlServerAccountMappingRepository(SqlServerProjectDatabase d
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
-        await using (var cleanup = connection.CreateCommand())
+        await using (var cleanup = database.CreateCommand(connection, projectId,
+            """
+            DELETE FROM {s}.staging_account_mapping_raw_row
+            WHERE batch_id IN (SELECT batch_id FROM {s}.import_batch WHERE dataset_kind = @kind);
+            DELETE FROM {s}.import_batch_source
+            WHERE batch_id IN (SELECT batch_id FROM {s}.import_batch WHERE dataset_kind = @kind);
+            DELETE FROM {s}.import_batch WHERE dataset_kind = @kind;
+            DELETE FROM {s}.target_account_mapping;
+            """))
         {
             cleanup.Transaction = transaction;
-            cleanup.CommandText =
-                """
-                DELETE FROM staging_account_mapping_raw_row
-                WHERE batch_id IN (SELECT batch_id FROM import_batch WHERE dataset_kind = @kind);
-                DELETE FROM import_batch_source
-                WHERE batch_id IN (SELECT batch_id FROM import_batch WHERE dataset_kind = @kind);
-                DELETE FROM import_batch WHERE dataset_kind = @kind;
-                DELETE FROM target_account_mapping;
-                """;
             cleanup.Parameters.AddWithValue("@kind", kindName);
             await cleanup.ExecuteNonQueryAsync(cancellationToken);
         }
 
         // 科目配對換版,未預期借貸組合等規則結果即失效(plan Phase 1)。
-        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken);
+        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
-        await using (var insertBatch = connection.CreateCommand())
+        await using (var insertBatch = database.CreateCommand(connection, projectId,
+            """
+            INSERT INTO {s}.import_batch
+                (batch_id, dataset_kind, source_file_path, source_file_name, imported_utc, row_count, columns_json)
+            VALUES (@batchId, @kind, @filePath, @fileName, @importedUtc, 0, @columnsJson);
+            INSERT INTO {s}.import_batch_source
+                (batch_id, source_no, source_file_path, source_file_name, sheet_name, encoding, delimiter, row_count, imported_utc)
+            VALUES (@batchId, 1, @filePath, @fileName, @sheetName, @encoding, @delimiter, 0, @importedUtc);
+            """))
         {
             insertBatch.Transaction = transaction;
-            insertBatch.CommandText =
-                """
-                INSERT INTO import_batch
-                    (batch_id, dataset_kind, source_file_path, source_file_name, imported_utc, row_count, columns_json)
-                VALUES (@batchId, @kind, @filePath, @fileName, @importedUtc, 0, @columnsJson);
-                INSERT INTO import_batch_source
-                    (batch_id, source_no, source_file_path, source_file_name, sheet_name, encoding, delimiter, row_count, imported_utc)
-                VALUES (@batchId, 1, @filePath, @fileName, @sheetName, @encoding, @delimiter, 0, @importedUtc);
-                """;
             insertBatch.Parameters.AddWithValue("@batchId", batchId);
             insertBatch.Parameters.AddWithValue("@kind", kindName);
             insertBatch.Parameters.AddWithValue("@filePath", source.FilePath);
@@ -82,15 +80,14 @@ public sealed class SqlServerAccountMappingRepository(SqlServerProjectDatabase d
         var firstErrors = new List<string>();
         var projected = new Dictionary<string, AccountMappingRow>(StringComparer.Ordinal);
 
-        await using (var insertRow = connection.CreateCommand())
+        await using (var insertRow = database.CreateCommand(connection, projectId,
+            """
+            INSERT INTO {s}.staging_account_mapping_raw_row
+                (batch_id, row_number, source_no, source_row_number, row_json)
+            VALUES (@batchId, @rowNumber, 1, @sourceRowNumber, @rowJson);
+            """))
         {
             insertRow.Transaction = transaction;
-            insertRow.CommandText =
-                """
-                INSERT INTO staging_account_mapping_raw_row
-                    (batch_id, row_number, source_no, source_row_number, row_json)
-                VALUES (@batchId, @rowNumber, 1, @sourceRowNumber, @rowJson);
-                """;
             insertRow.Parameters.AddWithValue("@batchId", batchId);
             var rowNumberParam = insertRow.Parameters.Add("@rowNumber", SqlDbType.BigInt);
             var sourceRowParam = insertRow.Parameters.Add("@sourceRowNumber", SqlDbType.Int);
@@ -135,15 +132,14 @@ public sealed class SqlServerAccountMappingRepository(SqlServerProjectDatabase d
                 $"科目配對檔有 {errorCount} 列無法轉換(整批已還原):{string.Join(" ", firstErrors)}");
         }
 
-        await using (var insertTarget = connection.CreateCommand())
+        await using (var insertTarget = database.CreateCommand(connection, projectId,
+            """
+            INSERT INTO {s}.target_account_mapping
+                (batch_id, source_row_number, account_code, account_name, standardized_category)
+            VALUES (@batchId, @sourceRowNumber, @accountCode, @accountName, @category);
+            """))
         {
             insertTarget.Transaction = transaction;
-            insertTarget.CommandText =
-                """
-                INSERT INTO target_account_mapping
-                    (batch_id, source_row_number, account_code, account_name, standardized_category)
-                VALUES (@batchId, @sourceRowNumber, @accountCode, @accountName, @category);
-                """;
             insertTarget.Parameters.AddWithValue("@batchId", batchId);
             var sourceRowParam = insertTarget.Parameters.Add("@sourceRowNumber", SqlDbType.Int);
             var codeParam = insertTarget.Parameters.Add("@accountCode", SqlDbType.NVarChar, 450);
@@ -160,14 +156,13 @@ public sealed class SqlServerAccountMappingRepository(SqlServerProjectDatabase d
             }
         }
 
-        await using (var updateCounts = connection.CreateCommand())
+        await using (var updateCounts = database.CreateCommand(connection, projectId,
+            """
+            UPDATE {s}.import_batch SET row_count = @rowCount WHERE batch_id = @batchId;
+            UPDATE {s}.import_batch_source SET row_count = @rowCount WHERE batch_id = @batchId AND source_no = 1;
+            """))
         {
             updateCounts.Transaction = transaction;
-            updateCounts.CommandText =
-                """
-                UPDATE import_batch SET row_count = @rowCount WHERE batch_id = @batchId;
-                UPDATE import_batch_source SET row_count = @rowCount WHERE batch_id = @batchId AND source_no = 1;
-                """;
             updateCounts.Parameters.AddWithValue("@rowCount", rowCount);
             updateCounts.Parameters.AddWithValue("@batchId", batchId);
             await updateCounts.ExecuteNonQueryAsync(cancellationToken);
@@ -185,19 +180,18 @@ public sealed class SqlServerAccountMappingRepository(SqlServerProjectDatabase d
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT TOP 1 b.batch_id, b.row_count, b.source_file_name, b.imported_utc,
-                   CASE WHEN EXISTS (SELECT 1 FROM target_account_mapping m WHERE m.standardized_category = @revenue)
+                   CASE WHEN EXISTS (SELECT 1 FROM {s}.target_account_mapping m WHERE m.standardized_category = @revenue)
                         THEN 1 ELSE 0 END,
-                   CASE WHEN EXISTS (SELECT 1 FROM target_account_mapping m
+                   CASE WHEN EXISTS (SELECT 1 FROM {s}.target_account_mapping m
                                      WHERE m.standardized_category IN (@receivables, @cash, @receiptInAdvance))
                         THEN 1 ELSE 0 END
-            FROM import_batch b
+            FROM {s}.import_batch b
             WHERE b.dataset_kind = @kind
             ORDER BY b.imported_utc DESC, b.batch_id DESC;
-            """;
+            """);
         command.Parameters.AddWithValue("@kind", DatasetKind.AccountMapping.ToStorageName());
         command.Parameters.AddWithValue("@revenue", AccountMappingCategories.Revenue);
         command.Parameters.AddWithValue("@receivables", AccountMappingCategories.Receivables);

@@ -22,22 +22,21 @@ public sealed class SqlServerCalendarStore(SqlServerProjectDatabase database) : 
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
-        await using (var delete = connection.CreateCommand())
+        await using (var delete = database.CreateCommand(connection, projectId,
+            "DELETE FROM {s}.staging_calendar_raw_day WHERE day_type = @type;"))
         {
             delete.Transaction = transaction;
-            delete.CommandText = "DELETE FROM staging_calendar_raw_day WHERE day_type = @type;";
             delete.Parameters.AddWithValue("@type", type.ToStorageName());
             await delete.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var insert = connection.CreateCommand())
+        await using (var insert = database.CreateCommand(connection, projectId,
+            """
+            INSERT INTO {s}.staging_calendar_raw_day (day_type, date, day_name)
+            VALUES (@type, @date, @name);
+            """))
         {
             insert.Transaction = transaction;
-            insert.CommandText =
-                """
-                INSERT INTO staging_calendar_raw_day (day_type, date, day_name)
-                VALUES (@type, @date, @name);
-                """;
 
             var typeParam = insert.Parameters.Add("@type", System.Data.SqlDbType.NVarChar, 10);
             var dateParam = insert.Parameters.Add("@date", System.Data.SqlDbType.NVarChar, 32);
@@ -54,7 +53,7 @@ public sealed class SqlServerCalendarStore(SqlServerProjectDatabase database) : 
         }
 
         // 行事曆換版影響週末/假日預篩選,既有規則結果失效(plan Phase 1)。
-        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken);
+        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
         await transaction.CommitAsync(cancellationToken);
     }
@@ -66,8 +65,8 @@ public sealed class SqlServerCalendarStore(SqlServerProjectDatabase database) : 
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM staging_calendar_raw_day WHERE day_type = @type;";
+        await using var command = database.CreateCommand(connection, projectId,
+            "SELECT COUNT(*) FROM {s}.staging_calendar_raw_day WHERE day_type = @type;");
         command.Parameters.AddWithValue("@type", type.ToStorageName());
 
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));

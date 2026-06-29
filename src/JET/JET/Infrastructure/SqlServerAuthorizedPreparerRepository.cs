@@ -31,32 +31,30 @@ public sealed class SqlServerAuthorizedPreparerRepository(SqlServerProjectDataba
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
-        await using (var cleanup = connection.CreateCommand())
+        await using (var cleanup = database.CreateCommand(connection, projectId,
+            """
+            DELETE FROM {s}.staging_authorized_preparer_raw_row;
+            DELETE FROM {s}.target_authorized_preparer;
+            """))
         {
             cleanup.Transaction = transaction;
-            cleanup.CommandText =
-                """
-                DELETE FROM staging_authorized_preparer_raw_row;
-                DELETE FROM target_authorized_preparer;
-                """;
             await cleanup.ExecuteNonQueryAsync(cancellationToken);
         }
 
         // 授權清單換版,非授權編製人員等規則結果即失效。
-        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken);
+        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
         var rowCount = 0;
         var names = new HashSet<string>(StringComparer.Ordinal);
 
-        await using (var insertRow = connection.CreateCommand())
+        await using (var insertRow = database.CreateCommand(connection, projectId,
+            """
+            INSERT INTO {s}.staging_authorized_preparer_raw_row
+                (batch_id, row_number, source_no, source_row_number, row_json)
+            VALUES (@batchId, @rowNumber, 1, @sourceRowNumber, @rowJson);
+            """))
         {
             insertRow.Transaction = transaction;
-            insertRow.CommandText =
-                """
-                INSERT INTO staging_authorized_preparer_raw_row
-                    (batch_id, row_number, source_no, source_row_number, row_json)
-                VALUES (@batchId, @rowNumber, 1, @sourceRowNumber, @rowJson);
-                """;
             insertRow.Parameters.AddWithValue("@batchId", batchId);
             var rowNumberParam = insertRow.Parameters.Add("@rowNumber", SqlDbType.BigInt);
             var sourceRowParam = insertRow.Parameters.Add("@sourceRowNumber", SqlDbType.Int);
@@ -89,11 +87,10 @@ public sealed class SqlServerAuthorizedPreparerRepository(SqlServerProjectDataba
                 $"檔案 '{source.FileName}' 沒有任何資料列。");
         }
 
-        await using (var insertTarget = connection.CreateCommand())
+        await using (var insertTarget = database.CreateCommand(connection, projectId,
+            "INSERT INTO {s}.target_authorized_preparer (name) VALUES (@name);"))
         {
             insertTarget.Transaction = transaction;
-            insertTarget.CommandText =
-                "INSERT INTO target_authorized_preparer (name) VALUES (@name);";
             var nameParam = insertTarget.Parameters.Add("@name", SqlDbType.NVarChar, 450);
 
             foreach (var name in names)
@@ -115,8 +112,8 @@ public sealed class SqlServerAuthorizedPreparerRepository(SqlServerProjectDataba
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT_BIG(*) FROM target_authorized_preparer;";
+        await using var command = database.CreateCommand(connection, projectId,
+            "SELECT COUNT_BIG(*) FROM {s}.target_authorized_preparer;");
         var result = await command.ExecuteScalarAsync(cancellationToken);
         return result is null or DBNull ? 0L : Convert.ToInt64(result);
     }

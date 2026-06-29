@@ -18,6 +18,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 連線設定分層基底與本機覆寫：複製到輸出目錄，供 composition root 以 AppContext.BaseDirectory 載入。 -->
+    <None Update="appsettings*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- ClosedXML 僅供 DemoWorkbookWriter(dev-only 寫檔)；匯入讀取走 DocumentFormat.OpenXml SAX -->
     <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.1.1" />
@@ -26,6 +31,9 @@
          顯式釘到 3.0.3(內建 SQLite 3.50.4.2;3.0.1 起原生套件改名為 SourceGear.sqlite3,有漏洞的 lib.e_sqlite3 因此離開相依圖)。 -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.2" />
+    <!-- 連線設定分層（appsettings + 環境覆寫）：composition root 以 IConfiguration + JSON 來源組合連線字串。 -->
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0" />
     <!-- 診斷日誌（第三層、dev-only）：M.E.Logging + LoggerMessage 來源產生器 -->
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />

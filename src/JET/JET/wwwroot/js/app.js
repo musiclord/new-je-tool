@@ -430,6 +430,15 @@
       .then(function (ping) {
         Store.setBridgeReady(true);
         Store.setDevToolsEnabled(ping && ping.devToolsEnabled === true);
+        // 背景查 SQL Server 後端身分，完成後在訊息面板補一則（連到哪台／版本／是否 Express）。
+        // 不阻塞專案載入——伺服器慢／不可達時 connect timeout 可能達數秒。
+        global.JetApi.systemDatabaseInfo({}).then(function (info) {
+          var s = info && info.sqlServer;
+          if (s && s.summary) {
+            Store.addMessage(s.summary, (s.configured && !s.reachable) ? 'warn' : 'info');
+            render();
+          }
+        }, function () { /* 身分查詢失敗不阻斷啟動，靜默略過 */ });
         return Ui.loadProjects();
       })
       .catch(function (error) {

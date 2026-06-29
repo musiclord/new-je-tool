@@ -41,6 +41,7 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
+    // schema-per-project：SQL Server 端的專案表須以 [schema]. 限定（與 production repo 同），SQLite 端維持裸名。
     private sealed record StagingTuple(long RowNumber, int SourceNo, int SourceRowNumber, string RowJson);
 
     private sealed record ImportSnapshot(
@@ -50,7 +51,7 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         IReadOnlyList<StagingTuple> Staging);
 
     private static async Task<ImportSnapshot> SnapshotAsync(
-        ImportBatchResult result, Func<DbConnection> open, DatasetKind kind)
+        ImportBatchResult result, Func<DbConnection> open, DatasetKind kind, string schemaPrefix = "")
     {
         await using DbConnection connection = open();
         await connection.OpenAsync();
@@ -58,7 +59,7 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         string columnsJson;
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = "SELECT columns_json FROM import_batch;";
+            command.CommandText = $"SELECT columns_json FROM {schemaPrefix}import_batch;";
             columnsJson = (string)(await command.ExecuteScalarAsync())!;
         }
 
@@ -66,7 +67,7 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         await using (var command = connection.CreateCommand())
         {
             command.CommandText =
-                $"SELECT row_number, source_no, source_row_number, row_json FROM {StagingTableFor(kind)} ORDER BY row_number;";
+                $"SELECT row_number, source_no, source_row_number, row_json FROM {schemaPrefix}{StagingTableFor(kind)} ORDER BY row_number;";
             await using var reader = await command.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
@@ -124,7 +125,8 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         var repo = new SqlServerImportRepository(project!.Database);
 
         var result = await repo.ReplaceBatchAsync(project.ProjectId, kind, Src(), columns, Stream(rows), CancellationToken.None);
-        return await SnapshotAsync(result, () => project.Database.CreateConnection(project.ProjectId), kind);
+        return await SnapshotAsync(result, () => project.Database.CreateConnection(project.ProjectId), kind,
+            SqlServerProjectSchema.QualifierFor(project.ProjectId));
     }
 
     private static async Task<ImportSnapshot> SqlServerReplaceThenAppendAsync(
@@ -136,7 +138,8 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
 
         await repo.ReplaceBatchAsync(project.ProjectId, kind, Src("q1.csv"), columns, Stream(first), CancellationToken.None);
         var result = await repo.AppendToBatchAsync(project.ProjectId, kind, Src("q2.csv"), columns, Stream(second), CancellationToken.None);
-        return await SnapshotAsync(result, () => project.Database.CreateConnection(project.ProjectId), kind);
+        return await SnapshotAsync(result, () => project.Database.CreateConnection(project.ProjectId), kind,
+            SqlServerProjectSchema.QualifierFor(project.ProjectId));
     }
 
     // ---- Task 1：replace / append 等價 ----
@@ -224,8 +227,9 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         // 既有批次未受污染
         await using var connection = project.Database.CreateConnection(project.ProjectId);
         await connection.OpenAsync();
-        Assert.Equal(3, await ScalarAsync(connection, "SELECT COUNT(*) FROM staging_gl_raw_row;"));
-        Assert.Equal(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM import_batch_source;"));
+        var s = SqlServerProjectSchema.QualifierFor(project.ProjectId);
+        Assert.Equal(3, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}staging_gl_raw_row;"));
+        Assert.Equal(1, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}import_batch_source;"));
     }
 
     // ---- Task 2：空來源 rollback（replace / append 各一） ----
@@ -247,8 +251,9 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         Assert.Equal(JetErrorCodes.EmptyWorkbook, ex.Code);
         await using var connection = project.Database.CreateConnection(project.ProjectId);
         await connection.OpenAsync();
-        Assert.Equal(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM import_batch WHERE dataset_kind = 'gl';"));
-        Assert.Equal(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM staging_gl_raw_row;"));
+        var s = SqlServerProjectSchema.QualifierFor(project.ProjectId);
+        Assert.Equal(0, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}import_batch WHERE dataset_kind = 'gl';"));
+        Assert.Equal(0, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}staging_gl_raw_row;"));
     }
 
     [SqlServerFact]
@@ -272,9 +277,10 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         Assert.Equal(JetErrorCodes.EmptyWorkbook, ex.Code);
         await using var connection = project.Database.CreateConnection(project.ProjectId);
         await connection.OpenAsync();
-        Assert.Equal(3, await ScalarAsync(connection, "SELECT COUNT(*) FROM staging_gl_raw_row;"));
-        Assert.Equal(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM import_batch_source;"));
-        Assert.Equal(3, await ScalarAsync(connection, "SELECT row_count FROM import_batch;"));
+        var s = SqlServerProjectSchema.QualifierFor(project.ProjectId);
+        Assert.Equal(3, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}staging_gl_raw_row;"));
+        Assert.Equal(1, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}import_batch_source;"));
+        Assert.Equal(3, await ScalarAsync(connection, $"SELECT row_count FROM {s}import_batch;"));
     }
 
     // ---- Task 3：匯入中途取消 → rollback + 無殘留 + 無 task 洩漏 ----
@@ -323,8 +329,9 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         Assert.True(disposed.Value); // enumerator 已釋放 → producer 無洩漏
         await using var connection = project.Database.CreateConnection(project.ProjectId);
         await connection.OpenAsync();
-        Assert.Equal(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM staging_gl_raw_row;"));
-        Assert.Equal(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM import_batch WHERE dataset_kind = 'gl';"));
+        var s = SqlServerProjectSchema.QualifierFor(project.ProjectId);
+        Assert.Equal(0, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}staging_gl_raw_row;"));
+        Assert.Equal(0, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}import_batch WHERE dataset_kind = 'gl';"));
     }
 
     // ---- Task 5：小檔案不退化（producer-consumer 啟動成本不吃掉小量場景） ----
@@ -382,8 +389,9 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync();
         await using var insert = connection.CreateCommand();
         insert.Transaction = transaction;
+        var s = SqlServerProjectSchema.QualifierFor(project.ProjectId);
         insert.CommandText =
-            "INSERT INTO staging_gl_raw_row (batch_id, row_number, source_no, source_row_number, row_json) " +
+            $"INSERT INTO {s}staging_gl_raw_row (batch_id, row_number, source_no, source_row_number, row_json) " +
             "VALUES (@batchId, @rowNumber, 1, @sourceRowNumber, @rowJson);";
         insert.Parameters.AddWithValue("@batchId", batchId);
         var rowNumberParam = insert.Parameters.Add("@rowNumber", SqlDbType.BigInt);
@@ -467,7 +475,8 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
 
         await using var connection = project.Database.CreateConnection(project.ProjectId);
         await connection.OpenAsync();
-        Assert.Equal(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM import_batch WHERE dataset_kind = 'gl';"));
+        var s = SqlServerProjectSchema.QualifierFor(project.ProjectId);
+        Assert.Equal(0, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}import_batch WHERE dataset_kind = 'gl';"));
     }
 
     [SqlServerFact]
@@ -496,9 +505,10 @@ public sealed class SqlServerImportRepositoryTests(ITestOutputHelper output)
 
         await using var connection = project.Database.CreateConnection(project.ProjectId);
         await connection.OpenAsync();
-        Assert.Equal(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM staging_gl_raw_row;"));
-        Assert.Equal(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM import_batch_source;"));
-        Assert.Equal(1, await ScalarAsync(connection, "SELECT row_count FROM import_batch WHERE dataset_kind = 'gl';"));
+        var s = SqlServerProjectSchema.QualifierFor(project.ProjectId);
+        Assert.Equal(1, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}staging_gl_raw_row;"));
+        Assert.Equal(1, await ScalarAsync(connection, $"SELECT COUNT(*) FROM {s}import_batch_source;"));
+        Assert.Equal(1, await ScalarAsync(connection, $"SELECT row_count FROM {s}import_batch WHERE dataset_kind = 'gl';"));
     }
 
 

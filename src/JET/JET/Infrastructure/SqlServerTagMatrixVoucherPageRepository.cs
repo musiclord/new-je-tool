@@ -19,6 +19,6 @@ public sealed class SqlServerTagMatrixVoucherPageRepository(SqlServerProjectData
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        return await TagMatrixVoucherPageReader.ReadAsync(connection, Dialect, request, cancellationToken);
+        return await TagMatrixVoucherPageReader.ReadAsync(connection, Dialect, request, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
     }
 }

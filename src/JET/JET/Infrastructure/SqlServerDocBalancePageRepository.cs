@@ -19,26 +19,25 @@ public sealed class SqlServerDocBalancePageRepository(SqlServerProjectDatabase d
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
         var hasCursor = PageCursor.TryDecode(request.Cursor, out var cursorKey);
         var keyset = hasCursor ? "AND document_number > @cursor" : string.Empty;
+
+        await using var command = database.CreateCommand(connection, projectId,
+            "SELECT document_number, " +
+            "       COALESCE(SUM(debit_amount_scaled), 0), " +
+            "       COALESCE(SUM(credit_amount_scaled), 0), " +
+            "       COALESCE(SUM(amount_scaled), 0) " +
+            "FROM {s}.target_gl_entry " +
+            "WHERE 1=1 " + keyset + " " +
+            "GROUP BY document_number " +
+            "HAVING SUM(amount_scaled) <> 0 " +
+            "ORDER BY document_number " + Dialect.LimitClause("@pageSize") + ";");
         if (hasCursor)
         {
             command.Parameters.AddWithValue("@cursor", cursorKey);
         }
 
         command.Parameters.AddWithValue("@pageSize", request.ClampedPageSize);
-
-        command.CommandText =
-            "SELECT document_number, " +
-            "       COALESCE(SUM(debit_amount_scaled), 0), " +
-            "       COALESCE(SUM(credit_amount_scaled), 0), " +
-            "       COALESCE(SUM(amount_scaled), 0) " +
-            "FROM target_gl_entry " +
-            "WHERE 1=1 " + keyset + " " +
-            "GROUP BY document_number " +
-            "HAVING SUM(amount_scaled) <> 0 " +
-            "ORDER BY document_number " + Dialect.LimitClause("@pageSize") + ";";
 
         var rows = new List<UnbalancedDocument>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

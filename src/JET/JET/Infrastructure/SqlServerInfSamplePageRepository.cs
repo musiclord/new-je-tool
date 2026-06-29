@@ -20,24 +20,24 @@ public sealed class SqlServerInfSamplePageRepository(SqlServerProjectDatabase da
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
         var hasCursor = PageCursor.TryDecode(request.Cursor, out var cursorKey);
         var keyset = hasCursor ? "AND g.entry_id > @cursor" : string.Empty;
+
+        // InfSamplePageSql.LatestRunFilterFor 把共用片段內的 result_rule_run 前綴專案 schema。
+        await using var command = database.CreateCommand(connection, projectId,
+            "SELECT g.document_number, g.account_code, g.account_name, " +
+            "       g.debit_amount_scaled, g.credit_amount_scaled, " +
+            "       g.post_date, g.approval_date, g.created_by, g.approved_by, g.document_description, g.entry_id " +
+            "FROM {s}.result_inf_sampling_test_sample s " +
+            "JOIN {s}.target_gl_entry g ON g.entry_id = s.entry_id " +
+            "WHERE " + InfSamplePageSql.LatestRunFilterFor(SqlServerProjectSchema.QualifierFor(projectId)) + " " + keyset + " " +
+            "ORDER BY g.entry_id " + Dialect.LimitClause("@pageSize") + ";");
         if (hasCursor)
         {
             command.Parameters.AddWithValue("@cursor", long.Parse(cursorKey));
         }
 
         command.Parameters.AddWithValue("@pageSize", request.ClampedPageSize);
-
-        command.CommandText =
-            "SELECT g.document_number, g.account_code, g.account_name, " +
-            "       g.debit_amount_scaled, g.credit_amount_scaled, " +
-            "       g.post_date, g.approval_date, g.created_by, g.approved_by, g.document_description, g.entry_id " +
-            "FROM result_inf_sampling_test_sample s " +
-            "JOIN target_gl_entry g ON g.entry_id = s.entry_id " +
-            "WHERE " + InfSamplePageSql.LatestRunFilter + " " + keyset + " " +
-            "ORDER BY g.entry_id " + Dialect.LimitClause("@pageSize") + ";";
 
         var rows = new List<InfSampleRow>();
         long lastEntryId = 0;

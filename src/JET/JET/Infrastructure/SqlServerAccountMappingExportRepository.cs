@@ -19,9 +19,8 @@ public sealed class SqlServerAccountMappingExportRepository(SqlServerProjectData
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            ValidationSql.CompletenessDiffCte +
+        await using var command = database.CreateCommand(connection, projectId,
+            ValidationSql.CompletenessDiffCteFor(SqlServerProjectSchema.QualifierFor(projectId)) +
             """
 
             SELECT m.account_code,
@@ -29,9 +28,9 @@ public sealed class SqlServerAccountMappingExportRepository(SqlServerProjectData
                    m.standardized_category,
                    CASE WHEN m.account_code IN (SELECT account_code FROM diff WHERE not_in_tb = 1)
                         THEN 1 ELSE 0 END AS not_in_tb
-            FROM target_account_mapping m
+            FROM {s}.target_account_mapping m
             ORDER BY m.account_code;
-            """;
+            """);
 
         var rows = new List<AccountMappingExportRow>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

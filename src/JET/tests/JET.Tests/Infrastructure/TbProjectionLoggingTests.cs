@@ -54,7 +54,9 @@ public sealed class TbProjectionLoggingTests
         return (diagnostic, factory);
     }
 
-    private static void AssertTbProjectionLog(RingBufferLoggerProvider diagnostic, string expectedProvider, int expectedRows)
+    // schemaPrefix：SQL Server 端的專案表在 logged SQL 中以 [schema]. 限定（production 同），SQLite 端為 ""。
+    private static void AssertTbProjectionLog(
+        RingBufferLoggerProvider diagnostic, string expectedProvider, int expectedRows, string schemaPrefix = "")
     {
         var entries = diagnostic.Snapshot();
         var sql = entries.Where(e => e.EventName == "sql.executed").ToList();
@@ -62,8 +64,8 @@ public sealed class TbProjectionLoggingTests
         // 一次性 SQL 僅 clear DELETE + staging SELECT；逐列 INSERT 不記事件（不隨母體列數成長）
         Assert.Equal(2, sql.Count);
         Assert.All(sql, e => Assert.Equal(expectedProvider, e.Fields["provider"]?.ToString()));
-        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("DELETE FROM target_tb_balance"));
-        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("staging_tb_raw_row"));
+        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains($"DELETE FROM {schemaPrefix}target_tb_balance"));
+        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains($"{schemaPrefix}staging_tb_raw_row"));
 
         var begin = entries.Single(e => e.EventName == "tx.begin");
         var commit = entries.Single(e => e.EventName == "tx.commit");
@@ -122,6 +124,7 @@ public sealed class TbProjectionLoggingTests
             Assert.Equal(2, result.ProjectedRowCount);
         }
 
-        AssertTbProjectionLog(diagnostic, "sqlServer", expectedRows: 2);
+        AssertTbProjectionLog(diagnostic, "sqlServer", expectedRows: 2,
+            SqlServerProjectSchema.QualifierFor(temp.ProjectId));
     }
 }

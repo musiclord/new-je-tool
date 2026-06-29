@@ -16,9 +16,10 @@ namespace JET.Tests.Infrastructure;
 public sealed class ValidationRunLoggingTests
 {
     // 標準多列 INSERT（SQLite 與 SQL Server 皆合法）；只填 NOT NULL + 少數欄，entry_id 為自增/IDENTITY。
-    private const string SeedThreeGlRows =
-        """
-        INSERT INTO target_gl_entry
+    // schema-per-project：SQL Server 端的 target_gl_entry 須以 [schema]. 限定，SQLite 端維持裸名（schemaPrefix ""）。
+    private static string SeedThreeGlRows(string schemaPrefix = "") =>
+        $"""
+        INSERT INTO {schemaPrefix}target_gl_entry
             (batch_id, source_row_number, document_number, line_item, post_date, account_code,
              amount_scaled, debit_amount_scaled, credit_amount_scaled, dr_cr)
         VALUES
@@ -41,14 +42,16 @@ public sealed class ValidationRunLoggingTests
         return (diagnostic, factory);
     }
 
-    private static async Task SeedAsync(DbConnection connection)
+    private static async Task SeedAsync(DbConnection connection, string schemaPrefix = "")
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = SeedThreeGlRows;
+        command.CommandText = SeedThreeGlRows(schemaPrefix);
         await command.ExecuteNonQueryAsync();
     }
 
-    private static void AssertValidationLog(RingBufferLoggerProvider diagnostic, string expectedProvider)
+    // schemaPrefix：SQL Server 端的專案表在 logged SQL 中以 [schema]. 限定（production 同），SQLite 端為 ""。
+    private static void AssertValidationLog(
+        RingBufferLoggerProvider diagnostic, string expectedProvider, string schemaPrefix = "")
     {
         var entries = diagnostic.Snapshot();
         var sql = entries.Where(e => e.EventName == "sql.executed").ToList();
@@ -59,7 +62,7 @@ public sealed class ValidationRunLoggingTests
         Assert.All(sql, e => Assert.True(Convert.ToInt64(e.Fields["duration_ms"]) >= 0));
 
         // INF 抽樣為 INSERT：rows_affected 反映抽出列數（母體 3 列、SampleSize 5 → 3）
-        var insert = sql.Single(e => e.Fields["sql"]!.ToString()!.Contains("INSERT INTO result_inf_sampling_test_sample"));
+        var insert = sql.Single(e => e.Fields["sql"]!.ToString()!.Contains($"INSERT INTO {schemaPrefix}result_inf_sampling_test_sample"));
         Assert.Equal(3, Convert.ToInt32(insert.Fields["rows_affected"]));
 
         // null 記錄 SELECT 綁定查核期間 → parameters 含 2025-01-01（使用者值參數綁定）
@@ -108,10 +111,11 @@ public sealed class ValidationRunLoggingTests
             return; // 無 LocalDB → 跳過（mystery-guest 豁免）
         }
 
+        var schemaPrefix = SqlServerProjectSchema.QualifierFor(temp.ProjectId);
         await using (var seed = temp.Database.CreateConnection(temp.ProjectId))
         {
             await seed.OpenAsync();
-            await SeedAsync(seed);
+            await SeedAsync(seed, schemaPrefix);
         }
 
         var (diagnostic, factory) = NewDiagnostic();
@@ -121,6 +125,6 @@ public sealed class ValidationRunLoggingTests
             await repo.RunAsync(temp.ProjectId, Input(), CancellationToken.None);
         }
 
-        AssertValidationLog(diagnostic, "sqlServer");
+        AssertValidationLog(diagnostic, "sqlServer", schemaPrefix);
     }
 }

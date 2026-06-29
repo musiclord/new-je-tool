@@ -20,21 +20,21 @@ public sealed class SqlServerCompletenessAccountPageRepository(SqlServerProjectD
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
         var hasCursor = PageCursor.TryDecode(request.Cursor, out var cursorKey);
         var keyset = hasCursor ? "WHERE account_code > @cursor" : string.Empty;
+
+        // ValidationSql.CompletenessDiffCteFor 把共用 CTE 內的 target_gl_entry/target_tb_balance 前綴專案 schema。
+        await using var command = database.CreateCommand(connection, projectId,
+            ValidationSql.CompletenessDiffCteFor(SqlServerProjectSchema.QualifierFor(projectId)) +
+            "\nSELECT account_code, account_name, tb_s, gl_s, tb_s - gl_s, not_in_tb " +
+            "FROM diff " + keyset +
+            " ORDER BY account_code " + Dialect.LimitClause("@pageSize") + ";");
         if (hasCursor)
         {
             command.Parameters.AddWithValue("@cursor", cursorKey);
         }
 
         command.Parameters.AddWithValue("@pageSize", request.ClampedPageSize);
-
-        command.CommandText =
-            ValidationSql.CompletenessDiffCte +
-            "\nSELECT account_code, account_name, tb_s, gl_s, tb_s - gl_s, not_in_tb " +
-            "FROM diff " + keyset +
-            " ORDER BY account_code " + Dialect.LimitClause("@pageSize") + ";";
 
         var rows = new List<CompletenessDiffAccount>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

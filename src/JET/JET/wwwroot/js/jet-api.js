@@ -100,6 +100,7 @@
   // 新增 action：先改 manifest，再加進這份清單，最後才能在 UI 呼叫 JetApi.<method>。
   var SUPPORTED_ACTIONS = [
     'system.ping',
+    'system.databaseInfo',
     'project.list',
     'project.create',
     'project.load',

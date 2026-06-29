@@ -271,8 +271,10 @@ public sealed class DemoRuleOracleTests
             // 假綠防呆:先證母體確實落地(14,000 列),否則「0 == 0」會偽綠。
             // 注意:DemoProjectPipeline.QueryScalarAsync 寫死走 SQLite,SQL Server 路徑須直接對
             // SqlServerProjectDatabase 查詢(同一 base 連線 → host 已建的 JET_{projectId} 庫)。
+            // schema-per-project：直接查 SQL Server 須以 [schema]. 限定 target_gl_entry（裸名會解析到 dbo）。
             var populationRows = await QuerySqlServerScalarAsync(
-                connectionString, ctx.ProjectId, "SELECT COUNT_BIG(*) FROM target_gl_entry;");
+                connectionString, ctx.ProjectId,
+                $"SELECT COUNT_BIG(*) FROM {SqlServerProjectSchema.QualifierFor(ctx.ProjectId)}target_gl_entry;");
             Assert.Equal((long)DemoDataFactory.GlVoucherCount * DemoDataFactory.LinesPerVoucher, populationRows);
 
             var p = await host.DispatchAsync("prescreen.run");
@@ -316,8 +318,10 @@ public sealed class DemoRuleOracleTests
         {
             var ctx = await DemoProjectPipeline.SetupAsync(host, databaseProvider: "sqlServer");
 
+            // schema-per-project：直接查 SQL Server 須以 [schema]. 限定 target_gl_entry（裸名會解析到 dbo）。
             var populationRows = await QuerySqlServerScalarAsync(
-                connectionString, ctx.ProjectId, "SELECT COUNT_BIG(*) FROM target_gl_entry;");
+                connectionString, ctx.ProjectId,
+                $"SELECT COUNT_BIG(*) FROM {SqlServerProjectSchema.QualifierFor(ctx.ProjectId)}target_gl_entry;");
             Assert.Equal((long)DemoDataFactory.GlVoucherCount * DemoDataFactory.LinesPerVoucher, populationRows);
 
             var v = await host.DispatchAsync("validate.run");

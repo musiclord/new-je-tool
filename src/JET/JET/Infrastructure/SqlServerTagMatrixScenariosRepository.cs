@@ -8,14 +8,15 @@ namespace JET.Infrastructure;
 public sealed class SqlServerTagMatrixScenariosRepository(SqlServerProjectDatabase database)
     : ITagMatrixScenariosRepository
 {
+    // {s} token：執行前由命令工廠收斂為專案 schema(provider 中立的 reader 只負責執行傳入字串)。
     private const string VoucherCountsSql =
         "SELECT r.scenario_position, COUNT_BIG(DISTINCT g.document_number) " +
-        "FROM result_filter_run r " +
-        "JOIN target_gl_entry g ON g.entry_id = r.entry_id " +
+        "FROM {s}.result_filter_run r " +
+        "JOIN {s}.target_gl_entry g ON g.entry_id = r.entry_id " +
         "GROUP BY r.scenario_position;";
 
     private const string RowCountsSql =
-        "SELECT scenario_position, COUNT_BIG(*) FROM result_filter_run GROUP BY scenario_position;";
+        "SELECT scenario_position, COUNT_BIG(*) FROM {s}.result_filter_run GROUP BY scenario_position;";
 
     public async Task<IReadOnlyDictionary<int, (long VoucherHitCount, long RowHitCount)>> GetCountsAsync(
         string projectId, CancellationToken cancellationToken)
@@ -24,7 +25,18 @@ public sealed class SqlServerTagMatrixScenariosRepository(SqlServerProjectDataba
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
+        // {s} 由命令工廠收斂為專案 schema;reader 為 provider 中立,故先展開 token 再傳入。
+        string voucherSql, rowSql;
+        await using (var v = database.CreateCommand(connection, projectId, VoucherCountsSql))
+        {
+            voucherSql = v.CommandText;
+        }
+        await using (var r = database.CreateCommand(connection, projectId, RowCountsSql))
+        {
+            rowSql = r.CommandText;
+        }
+
         return await TagMatrixScenarioCounts.ReadAsync(
-            connection, VoucherCountsSql, RowCountsSql, cancellationToken);
+            connection, voucherSql, rowSql, cancellationToken);
     }
 }

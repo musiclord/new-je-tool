@@ -20,4 +20,14 @@ internal static class InfSamplePageSql
         "s.run_id = (SELECT MAX(rr.run_id) FROM result_rule_run rr " +
         "            WHERE rr.run_kind = 'validate' " +
         "              AND rr.generated_utc = (SELECT MAX(generated_utc) FROM result_rule_run WHERE run_kind = 'validate'))";
+
+    /// <summary>
+    /// 與 <see cref="LatestRunFilter"/> 相同的 WHERE 片段，但把 result_rule_run 前綴
+    /// <paramref name="schemaPrefix"/> 以支援 SQL Server schema-per-project。預設 <c>""</c> 即逐字
+    /// 等於 <see cref="LatestRunFilter"/>（SQLite 路徑仍直接用 const 常數，不需呼叫本方法）。
+    /// 片段文字為單一事實來源（此處僅就兩處 FROM result_rule_run 加限定詞，不複製 SQL 主體）。
+    /// SQL Server 呼叫端傳 <see cref="SqlServerProjectSchema.QualifierFor"/> 的結果。
+    /// </summary>
+    public static string LatestRunFilterFor(string schemaPrefix) =>
+        LatestRunFilter.Replace("FROM result_rule_run", $"FROM {schemaPrefix}result_rule_run");
 }

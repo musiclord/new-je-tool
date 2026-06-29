@@ -33,46 +33,49 @@ public sealed class SqlServerPrescreenRunRepository(SqlServerProjectDatabase dat
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
+        // schema 限定詞唯一來源（集中驗證）；共用述詞片段內的專案表名前綴 [prj_xxx].。
+        var schemaPrefix = SqlServerProjectSchema.QualifierFor(projectId);
+
         var runPostPeriod = input.HasApprovalDate && input.LastPeriodStart is not null;
         long postPeriodCount = 0;
         if (runPostPeriod)
         {
             postPeriodCount = await CountWhereAsync(
-                connection, cancellationToken,
+                connection, projectId, cancellationToken,
                 cmd => Predicates.PostPeriodApproval(cmd, input.LastPeriodStart!));
         }
 
         var suspiciousCount = await CountWhereAsync(
-            connection, cancellationToken,
+            connection, projectId, cancellationToken,
             cmd => Predicates.SuspiciousKeywords(cmd));
 
         long unexpectedPairCount = 0;
         if (input.RunUnexpectedAccountPair)
         {
             unexpectedPairCount = await CountWhereAsync(
-                connection, cancellationToken,
-                cmd => Predicates.UnexpectedAccountPair(cmd));
+                connection, projectId, cancellationToken,
+                cmd => Predicates.UnexpectedAccountPair(cmd, schemaPrefix));
         }
 
         var zerosThreshold = TrailingZeroThreshold.DefaultZerosThreshold;
         var zeroModulus = TrailingZeroThreshold.ZeroModulus(zerosThreshold, input.MoneyScale);
         var trailingZerosCount = await CountWhereAsync(
-            connection, cancellationToken,
+            connection, projectId, cancellationToken,
             cmd => Predicates.TrailingZeros(cmd, zeroModulus));
 
         var creators = input.HasCreatedBy
-            ? await ReadCreatorsAsync(connection, cancellationToken)
+            ? await ReadCreatorsAsync(connection, projectId, cancellationToken)
             : [];
 
-        var (distinctAccounts, accounts) = await ReadAccountUsageAsync(connection, cancellationToken);
+        var (distinctAccounts, accounts) = await ReadAccountUsageAsync(connection, projectId, cancellationToken);
 
         var weekendPostingCount = await CountWhereAsync(
-            connection, cancellationToken,
-            _ => Predicates.Weekend("post_date", input.NonWorkingDays));
+            connection, projectId, cancellationToken,
+            _ => Predicates.Weekend("post_date", input.NonWorkingDays, schemaPrefix));
         long? weekendApprovalCount = input.HasApprovalDate
             ? await CountWhereAsync(
-                connection, cancellationToken,
-                _ => Predicates.Weekend("approval_date", input.NonWorkingDays))
+                connection, projectId, cancellationToken,
+                _ => Predicates.Weekend("approval_date", input.NonWorkingDays, schemaPrefix))
             : null;
 
         long holidayPostingCount = 0;
@@ -80,21 +83,21 @@ public sealed class SqlServerPrescreenRunRepository(SqlServerProjectDatabase dat
         if (input.HasHolidays)
         {
             holidayPostingCount = await CountWhereAsync(
-                connection, cancellationToken,
-                _ => Predicates.Holiday("post_date"));
+                connection, projectId, cancellationToken,
+                _ => Predicates.Holiday("post_date", schemaPrefix));
             holidayApprovalCount = input.HasApprovalDate
                 ? await CountWhereAsync(
-                    connection, cancellationToken,
-                    _ => Predicates.Holiday("approval_date"))
+                    connection, projectId, cancellationToken,
+                    _ => Predicates.Holiday("approval_date", schemaPrefix))
                 : null;
         }
 
         var blankDescriptionCount = await CountWhereAsync(
-            connection, cancellationToken,
+            connection, projectId, cancellationToken,
             _ => Predicates.BlankDescription());
 
         var backdatedPostingCount = await CountWhereAsync(
-            connection, cancellationToken,
+            connection, projectId, cancellationToken,
             _ => Predicates.Backdated());
 
         // C5 非授權編製人員:授權清單未匯入時閘控跳過(計 0、handler 標 na)。
@@ -102,19 +105,19 @@ public sealed class SqlServerPrescreenRunRepository(SqlServerProjectDatabase dat
         if (input.HasAuthorizedPreparers)
         {
             nonAuthorizedPreparerCount = await CountWhereAsync(
-                connection, cancellationToken,
-                _ => Predicates.NonAuthorizedPreparer());
+                connection, projectId, cancellationToken,
+                _ => Predicates.NonAuthorizedPreparer(schemaPrefix));
         }
 
         // C6 低頻編製者:無閘控、永遠跑(固定預設門檻)。
         var lowFrequencyPreparerCount = await CountWhereAsync(
-            connection, cancellationToken,
-            cmd => Predicates.LowFrequencyPreparer(cmd, PreparerFrequency.DefaultMaxEntries));
+            connection, projectId, cancellationToken,
+            cmd => Predicates.LowFrequencyPreparer(cmd, PreparerFrequency.DefaultMaxEntries, schemaPrefix));
 
         // C9 低頻科目:無閘控、永遠跑(固定預設門檻)。
         var lowFrequencyAccountCount = await CountWhereAsync(
-            connection, cancellationToken,
-            cmd => Predicates.LowFrequencyAccount(cmd, AccountFrequency.DefaultMaxEntries));
+            connection, projectId, cancellationToken,
+            cmd => Predicates.LowFrequencyAccount(cmd, AccountFrequency.DefaultMaxEntries, schemaPrefix));
 
         return new PrescreenRunResult(
             postPeriodCount,
@@ -138,33 +141,38 @@ public sealed class SqlServerPrescreenRunRepository(SqlServerProjectDatabase dat
 
     private async Task<long> CountWhereAsync(
         SqlConnection connection,
+        string projectId,
         CancellationToken cancellationToken,
         Func<DbCommand, string> predicateFactory)
     {
         await using var command = connection.CreateCommand();
         var predicate = predicateFactory(command);
-        command.CommandText = $"SELECT COUNT_BIG(*) FROM target_gl_entry g WHERE {predicate};";
+        // {s} 由命令工廠收斂;述詞需先綁到 command,故借工廠展開 token 後回填本命令。
+        await using (var expand = database.CreateCommand(connection, projectId,
+            $"SELECT COUNT_BIG(*) FROM {{s}}.target_gl_entry g WHERE {predicate};"))
+        {
+            command.CommandText = expand.CommandText;
+        }
 
         var result = await command.ExecuteScalarLoggedAsync(_log, Provider, cancellationToken);
         return result is null or DBNull ? 0L : Convert.ToInt64(result);
     }
 
     private async Task<IReadOnlyList<CreatorSummaryRow>> ReadCreatorsAsync(
-        SqlConnection connection, CancellationToken cancellationToken)
+        SqlConnection connection, string projectId, CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            $"""
-            SELECT TOP ({SummaryRowLimit})
+        await using var command = database.CreateCommand(connection, projectId,
+            $$"""
+            SELECT TOP ({{SummaryRowLimit}})
                    COALESCE(created_by, ''),
                    COUNT_BIG(*),
                    COALESCE(SUM(debit_amount_scaled), 0),
                    COALESCE(SUM(credit_amount_scaled), 0),
                    COALESCE(SUM(CAST(CASE WHEN is_manual = 1 THEN 1 ELSE 0 END AS BIGINT)), 0)
-            FROM target_gl_entry
+            FROM {s}.target_gl_entry
             GROUP BY created_by
             ORDER BY COUNT_BIG(*) DESC, created_by;
-            """;
+            """);
 
         var rows = new List<CreatorSummaryRow>();
         await using var reader = await command.ExecuteReaderLoggedAsync(_log, Provider, cancellationToken);
@@ -182,28 +190,27 @@ public sealed class SqlServerPrescreenRunRepository(SqlServerProjectDatabase dat
     }
 
     private async Task<(long Distinct, IReadOnlyList<AccountUsageRow> Accounts)> ReadAccountUsageAsync(
-        SqlConnection connection, CancellationToken cancellationToken)
+        SqlConnection connection, string projectId, CancellationToken cancellationToken)
     {
         long distinct;
-        await using (var countCommand = connection.CreateCommand())
+        await using (var countCommand = database.CreateCommand(connection, projectId,
+            "SELECT COUNT_BIG(DISTINCT account_code) FROM {s}.target_gl_entry;"))
         {
-            countCommand.CommandText = "SELECT COUNT_BIG(DISTINCT account_code) FROM target_gl_entry;";
             distinct = Convert.ToInt64(await countCommand.ExecuteScalarLoggedAsync(_log, Provider, cancellationToken));
         }
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            $"""
-            SELECT TOP ({SummaryRowLimit})
+        await using var command = database.CreateCommand(connection, projectId,
+            $$"""
+            SELECT TOP ({{SummaryRowLimit}})
                    COALESCE(account_code, ''),
                    MAX(account_name),
                    COUNT_BIG(*),
                    COALESCE(SUM(debit_amount_scaled), 0),
                    COALESCE(SUM(credit_amount_scaled), 0)
-            FROM target_gl_entry
+            FROM {s}.target_gl_entry
             GROUP BY account_code
             ORDER BY COUNT_BIG(*) ASC, account_code;
-            """;
+            """);
 
         var rows = new List<AccountUsageRow>();
         await using var reader = await command.ExecuteReaderLoggedAsync(_log, Provider, cancellationToken);

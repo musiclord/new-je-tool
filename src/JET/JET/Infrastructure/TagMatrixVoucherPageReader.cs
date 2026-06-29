@@ -19,19 +19,21 @@ namespace JET.Infrastructure;
 /// </summary>
 internal static class TagMatrixVoucherPageReader
 {
-    private const string PageSqlHead =
+    // schemaPrefix 預設 ""（SQLite 裸名，逐字不變）；SQL Server 傳 QualifierFor(projectId) 前綴專案表名。
+    private static string PageSqlHead(string schemaPrefix) =>
         "SELECT g.document_number, MIN(g.post_date), MIN(g.created_by), " +
         "       COALESCE(SUM(g.debit_amount_scaled), 0) " +
-        "FROM target_gl_entry g " +
+        $"FROM {schemaPrefix}target_gl_entry g " +
         "WHERE g.document_number IS NOT NULL " +
-        "  AND EXISTS (SELECT 1 FROM result_filter_run r WHERE r.entry_id = g.entry_id) ";
+        $"  AND EXISTS (SELECT 1 FROM {schemaPrefix}result_filter_run r WHERE r.entry_id = g.entry_id) ";
 
     private const string PageSqlTail =
         "GROUP BY g.document_number " +
         "ORDER BY g.document_number ";
 
     public static async Task<(PageResult<VoucherTagRow> Page, IReadOnlyDictionary<string, IReadOnlyList<int>> PositionsByDoc)> ReadAsync(
-        DbConnection connection, ISqlDialect dialect, PageRequest request, CancellationToken cancellationToken)
+        DbConnection connection, ISqlDialect dialect, PageRequest request, CancellationToken cancellationToken,
+        string schemaPrefix = "")
     {
         var hasCursor = PageCursor.TryDecode(request.Cursor, out var cursorKey);
 
@@ -42,7 +44,7 @@ internal static class TagMatrixVoucherPageReader
         {
             var keyset = hasCursor ? "AND g.document_number > @cursor " : string.Empty;
             command.CommandText =
-                PageSqlHead + keyset + PageSqlTail + dialect.LimitClause("@pageSize") + ";";
+                PageSqlHead(schemaPrefix) + keyset + PageSqlTail + dialect.LimitClause("@pageSize") + ";";
             if (hasCursor)
             {
                 command.Parameters.Add(Param(command, "@cursor", cursorKey));
@@ -82,8 +84,8 @@ internal static class TagMatrixVoucherPageReader
             var lowBound = hasCursor ? "AND g.document_number > @lo " : string.Empty;
             command.CommandText =
                 "SELECT DISTINCT g.document_number, r.scenario_position " +
-                "FROM result_filter_run r " +
-                "JOIN target_gl_entry g ON g.entry_id = r.entry_id " +
+                $"FROM {schemaPrefix}result_filter_run r " +
+                $"JOIN {schemaPrefix}target_gl_entry g ON g.entry_id = r.entry_id " +
                 "WHERE g.document_number IS NOT NULL " +
                 lowBound +
                 "AND g.document_number <= @hi " +

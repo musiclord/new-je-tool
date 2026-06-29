@@ -1,6 +1,7 @@
 using JET.Application;
 using JET.Bridge;
 using JET.Infrastructure;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -39,12 +40,25 @@ public static class AppCompositionRoot
         var projectStore = new JsonFileProjectStore(folder);
         var database = new JetProjectDatabase(folder);
 
+        // 連線設定分層(Task 8):appsettings.json(基底、進庫) + appsettings.{env}.json(本機覆寫),
+        // env 取 JET_ENVIRONMENT(缺省 Production);兩檔皆 optional,缺檔時退回環境變數/預設、不致命。
+        var environmentName = Environment.GetEnvironmentVariable("JET_ENVIRONMENT") ?? "Production";
+        IConfiguration config = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true)
+            .AddJsonFile($"appsettings.{environmentName}.json", optional: true)
+            .Build();
+
         // 多 provider:每個每專案 repo 依專案 databaseProvider 路由到 SQLite 或 SQL Server 實作
-        // (guide §13;handler 只見介面,不感知 provider)。SQL Server base 連線取自環境變數
-        // JET_SQLSERVER_CONNECTION(InitialCatalog 由 provider 依專案覆寫);未設定時 sqlite 專案不受影響,
-        // 選 sqlServer 的專案會在連線時得到明確錯誤。
+        // (guide §13;handler 只見介面,不感知 provider)。SQL Server base 連線字串由 SqlConnectionStringFactory
+        // 決定來源優先序:測試覆寫參數 sqlServerConnectionString → 環境變數 JET_SQLSERVER_CONNECTION → Sql:* 設定組合。
+        // 前兩者(envOverride)非空時直接沿用,既有 SQL Server 測試靠環境變數探測,此路徑不可破。
+        // 單庫名顯式取自 Sql:Database(安全預設 JET_DEV);InitialCatalog 由 provider 依專案覆寫,sqlite 專案不受影響。
+        var envOverride = sqlServerConnectionString ?? Environment.GetEnvironmentVariable("JET_SQLSERVER_CONNECTION");
+        var sqlServerConnString = SqlConnectionStringFactory.Build(config, envOverride);
+        var singleDatabaseName = config["Sql:Database"] ?? "JET_DEV";
         var sqlServerDatabase = new SqlServerProjectDatabase(new SqlServerConnectionOptions(
-            sqlServerConnectionString ?? Environment.GetEnvironmentVariable("JET_SQLSERVER_CONNECTION")));
+            sqlServerConnString, singleDatabaseName));
         var providerResolver = new ProjectProviderResolver(projectStore);
 
         // 診斷日誌(第三層、dev-only):啟用 dev 工具時才建 ring buffer provider 並組 LoggerFactory;
@@ -68,6 +82,38 @@ public static class AppCompositionRoot
                     builder.AddProvider(diagnosticFile);
                 }
             });
+
+        // 啟動健康檢查（非阻斷、Task 9）：SQL Server 已設定（base 連線字串非空）時，連一次 master
+        // 跑 SELECT @@VERSION, DB_NAME(), SUSER_SNAME() 並把去敏結果寫進啟動日誌。連 master（而非單庫
+        // JET_DEV）避免「庫尚未建立」誤判失敗。失敗只記日誌、不丟例外、不中止 dispatcher——純 SQLite
+        // 使用者（未設定 SQL Server）整段略過。ProbeAsync 已把例外收斂成去敏 HealthResult，訊息永不含密碼。
+        //
+        // 必須在背景執行緒 fire-and-log，不可同步等待：本方法在 Form1 建構式（UI 主執行緒、Application.Run
+        // 訊息迴圈尚未啟動）被呼叫，而 Control 基底建構式此時已安裝 WindowsFormsSynchronizationContext。
+        // 若在此 .GetAwaiter().GetResult() 同步等待 async 探測，ProbeAsync 的續行會被 Post 回尚未 pump 的
+        // 主執行緒 → 死鎖、視窗永不顯示。背景探測讓視窗立即顯示，慢速/連不上的伺服器也不拖延啟動（非阻斷本意）。
+        if (!string.IsNullOrWhiteSpace(sqlServerConnString))
+        {
+            var startupLogger = loggerFactory.CreateLogger(typeof(SqlServerHealthCheck));
+            var probeConnString = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(sqlServerConnString)
+            {
+                InitialCatalog = "master"
+            }.ConnectionString;
+            _ = Task.Run(async () =>
+            {
+                var health = await SqlServerHealthCheck
+                    .ProbeAsync(probeConnString, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (health.Ok)
+                {
+                    startupLogger.LogInformation("{HealthMessage}", health.Message);
+                }
+                else
+                {
+                    startupLogger.LogWarning("{HealthMessage}", health.Message);
+                }
+            });
+        }
 
         var databaseInitializer = new ProviderRoutingProjectDatabaseInitializer(
             providerResolver, database, sqlServerDatabase);
@@ -176,6 +222,8 @@ public static class AppCompositionRoot
         [
             // 正式契約 handlers
             new SystemPingHandler(enableDevTools),
+            // SQL Server 後端身分（去敏）：前端啟動後查一次,在訊息面板顯示連到哪台/版本/是否 Express。
+            new SystemDatabaseInfoHandler(sqlServerConnString, singleDatabaseName),
             new ProjectListHandler(projectStore),
             new ProjectCreateHandler(projectStore, databaseInitializer, session),
             new ProjectLoadHandler(

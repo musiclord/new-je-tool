@@ -46,29 +46,27 @@ public sealed class SqlServerGlRepository(SqlServerProjectDatabase database, ILo
         await using var transaction = (SqlTransaction)await writeConnection.BeginTransactionAsync(cancellationToken);
         using var txLog = DiagnosticDb.BeginTransaction(_log, Provider);
 
-        await using (var clear = writeConnection.CreateCommand())
+        await using (var clear = database.CreateCommand(writeConnection, projectId, "DELETE FROM {s}.target_gl_entry;"))
         {
             clear.Transaction = transaction;
-            clear.CommandText = "DELETE FROM target_gl_entry;";
             await clear.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 
         // 重投影改寫 target,既有規則結果失效(投影失敗 rollback 時清除一併回退)。
-        await RuleRunResultReset.ClearWithinAsync(writeConnection, transaction, cancellationToken);
+        await RuleRunResultReset.ClearWithinAsync(writeConnection, transaction, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
-        var sourceLabels = await ProjectionSourceLabels.LoadAsync(writeConnection, transaction, batchId, cancellationToken);
+        var sourceLabels = await ProjectionSourceLabels.LoadAsync(writeConnection, transaction, batchId, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
         // read 連線:staging 已提交不可變,獨立連線串流(不參與 write 交易,避免 MARS 衝突)。
         await using var readConnection = database.CreateConnection(projectId);
         await readConnection.OpenAsync(cancellationToken);
-        await using var select = readConnection.CreateCommand();
-        select.CommandText =
+        await using var select = database.CreateCommand(readConnection, projectId,
             """
             SELECT row_number, source_no, source_row_number, row_json
-            FROM staging_gl_raw_row
+            FROM {s}.staging_gl_raw_row
             WHERE batch_id = @batchId
             ORDER BY row_number;
-            """;
+            """);
         var batchParam = select.CreateParameter();
         batchParam.ParameterName = "@batchId";
         batchParam.Value = batchId;
@@ -78,9 +76,10 @@ public sealed class SqlServerGlRepository(SqlServerProjectDatabase database, ILo
         using var projectionReader = new GlProjectionDataReader(
             stagingReader, batchId, spec, moneyScale, dateOptions, sourceLabels, JsonOptions, cancellationToken);
 
+        var schema = SqlServerProjectSchema.For(projectId);
         using (var bulk = new SqlBulkCopy(writeConnection, SqlBulkCopyOptions.Default, transaction))
         {
-            bulk.DestinationTableName = "dbo.target_gl_entry";
+            bulk.DestinationTableName = $"[{schema}].[target_gl_entry]";
             bulk.EnableStreaming = true;
             bulk.BulkCopyTimeout = 0; // 大資料路徑不設逾時
             foreach (var column in GlProjectionDataReader.ColumnNames)
@@ -110,27 +109,23 @@ public sealed class SqlServerGlRepository(SqlServerProjectDatabase database, ILo
         // lineID 未對應:投影後逐傳票自動編號（語意對齊 SqliteGlRepository;衍生值、不參與計算）。
         if (!spec.HasLineItem)
         {
-            await using var number = writeConnection.CreateCommand();
-            number.Transaction = transaction;
-            number.CommandText =
+            await using var number = database.CreateCommand(writeConnection, projectId,
                 """
                 WITH c AS (
                     SELECT line_item,
                            ROW_NUMBER() OVER (PARTITION BY document_number ORDER BY source_row_number) AS rn
-                    FROM target_gl_entry
+                    FROM {s}.target_gl_entry
                 )
                 UPDATE c SET line_item = CAST(rn AS NVARCHAR(20));
-                """;
+                """);
+            number.Transaction = transaction;
             await number.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 
         // part(a) 控制總數落地（同一交易、commit 之前;MERGE 單列 upsert,語意對齊 SQLite ON CONFLICT）。
-        await using (var ct = writeConnection.CreateCommand())
-        {
-            ct.Transaction = transaction;
-            ct.CommandText =
-                """
-                MERGE dbo.gl_control_total AS target
+        await using (var ct = database.CreateCommand(writeConnection, projectId,
+            """
+                MERGE {s}.gl_control_total AS target
                 USING (SELECT 1 AS singleton, @src AS source_row_count, @tgt AS target_row_count,
                               @debit AS target_debit_scaled, @credit AS target_credit_scaled) AS source
                 ON target.singleton = source.singleton
@@ -143,7 +138,9 @@ public sealed class SqlServerGlRepository(SqlServerProjectDatabase database, ILo
                     INSERT (singleton, source_row_count, target_row_count, target_debit_scaled, target_credit_scaled)
                     VALUES (source.singleton, source.source_row_count, source.target_row_count,
                             source.target_debit_scaled, source.target_credit_scaled);
-                """;
+                """))
+        {
+            ct.Transaction = transaction;
             ct.Parameters.AddWithValue("@src", projectionReader.SourceRowCount);
             ct.Parameters.AddWithValue("@tgt", (long)projectionReader.ValidRowCount);
             ct.Parameters.AddWithValue("@debit", projectionReader.TotalDebitScaled);
@@ -157,18 +154,17 @@ public sealed class SqlServerGlRepository(SqlServerProjectDatabase database, ILo
         if (projectionReader.ValidRowCount > 0)
         {
             var emptyTextColumns = new HashSet<string>();
-            await using (var probe = writeConnection.CreateCommand())
-            {
-                probe.Transaction = transaction;
-                probe.CommandText =
-                    """
+            await using (var probe = database.CreateCommand(writeConnection, projectId,
+                """
                     SELECT
                       SUM(CAST(CASE WHEN document_number IS NOT NULL AND LTRIM(RTRIM(document_number)) <> '' THEN 1 ELSE 0 END AS BIGINT)),
                       SUM(CAST(CASE WHEN account_code IS NOT NULL AND LTRIM(RTRIM(account_code)) <> '' THEN 1 ELSE 0 END AS BIGINT)),
                       SUM(CAST(CASE WHEN account_name IS NOT NULL AND LTRIM(RTRIM(account_name)) <> '' THEN 1 ELSE 0 END AS BIGINT)),
                       SUM(CAST(CASE WHEN document_description IS NOT NULL AND LTRIM(RTRIM(document_description)) <> '' THEN 1 ELSE 0 END AS BIGINT))
-                    FROM target_gl_entry;
-                    """;
+                    FROM {s}.target_gl_entry;
+                    """))
+            {
+                probe.Transaction = transaction;
                 await using var reader = await probe.ExecuteReaderAsync(cancellationToken);
                 await reader.ReadAsync(cancellationToken);
                 if (reader.GetInt64(0) == 0) { emptyTextColumns.Add("document_number"); }

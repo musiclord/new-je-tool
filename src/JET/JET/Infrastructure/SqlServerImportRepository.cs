@@ -55,35 +55,33 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
         using var txLog = DiagnosticDb.BeginTransaction(_log, Provider);
 
         // replace 語意:同一交易清除該 dataset 全部舊狀態(含 target 與已提交配對)。
-        await using (var cleanup = connection.CreateCommand())
+        await using (var cleanup = database.CreateCommand(connection, projectId,
+            $$"""
+                DELETE FROM {s}.{{stagingTable}}
+                WHERE batch_id IN (SELECT batch_id FROM {s}.import_batch WHERE dataset_kind = @kind);
+                DELETE FROM {s}.import_batch_source
+                WHERE batch_id IN (SELECT batch_id FROM {s}.import_batch WHERE dataset_kind = @kind);
+                DELETE FROM {s}.import_batch WHERE dataset_kind = @kind;
+                DELETE FROM {s}.{{targetTable}};
+                DELETE FROM {s}.config_field_mapping WHERE dataset_kind = @kind;
+                """))
         {
             cleanup.Transaction = transaction;
             cleanup.CommandTimeout = 0; // 重匯入清除百萬列 staging/target 屬長批次,不設 30s 逾時
-            cleanup.CommandText =
-                $"""
-                DELETE FROM {stagingTable}
-                WHERE batch_id IN (SELECT batch_id FROM import_batch WHERE dataset_kind = @kind);
-                DELETE FROM import_batch_source
-                WHERE batch_id IN (SELECT batch_id FROM import_batch WHERE dataset_kind = @kind);
-                DELETE FROM import_batch WHERE dataset_kind = @kind;
-                DELETE FROM {targetTable};
-                DELETE FROM config_field_mapping WHERE dataset_kind = @kind;
-                """;
             cleanup.Parameters.AddWithValue("@kind", kindName);
             await cleanup.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 
-        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken);
+        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
-        await using (var insertBatch = connection.CreateCommand())
-        {
-            insertBatch.Transaction = transaction;
-            insertBatch.CommandText =
-                """
-                INSERT INTO import_batch
+        await using (var insertBatch = database.CreateCommand(connection, projectId,
+            """
+                INSERT INTO {s}.import_batch
                     (batch_id, dataset_kind, source_file_path, source_file_name, imported_utc, row_count, columns_json)
                 VALUES (@batchId, @kind, @filePath, @fileName, @importedUtc, 0, @columnsJson);
-                """;
+                """))
+        {
+            insertBatch.Transaction = transaction;
             insertBatch.Parameters.AddWithValue("@batchId", batchId);
             insertBatch.Parameters.AddWithValue("@kind", kindName);
             insertBatch.Parameters.AddWithValue("@filePath", source.FilePath);
@@ -93,11 +91,11 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
             await insertBatch.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 
-        await InsertSourceRecordAsync(connection, transaction, batchId, sourceNo: 1, source, importedUtc, cancellationToken);
+        await InsertSourceRecordAsync(connection, transaction, projectId, batchId, sourceNo: 1, source, importedUtc, cancellationToken);
 
         var bulkStopwatch = Stopwatch.StartNew();
         var (rowCount, observedKeys) = await BulkCopyStagingAsync(
-            connection, transaction, stagingTable, batchId, sourceNo: 1,
+            connection, transaction, projectId, stagingTable, batchId, sourceNo: 1,
             isAppend: false, appendStartRowNumber: 0, rows, cancellationToken);
         bulkStopwatch.Stop();
 
@@ -114,16 +112,16 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
             rowCount * 1000.0 / Math.Max(1, bulkStopwatch.ElapsedMilliseconds));
 
         var effectiveColumns = TabularHeaderNormalizer.FinalizeBatchColumns(columns, observedKeys);
-        await using (var updateColumns = connection.CreateCommand())
+        await using (var updateColumns = database.CreateCommand(connection, projectId,
+            "UPDATE {s}.import_batch SET columns_json = @columnsJson WHERE batch_id = @batchId;"))
         {
             updateColumns.Transaction = transaction;
-            updateColumns.CommandText = "UPDATE import_batch SET columns_json = @columnsJson WHERE batch_id = @batchId;";
             updateColumns.Parameters.AddWithValue("@columnsJson", JsonSerializer.Serialize(effectiveColumns, JsonOptions));
             updateColumns.Parameters.AddWithValue("@batchId", batchId);
             await updateColumns.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 
-        await UpdateRowCountsAsync(connection, transaction, batchId, sourceNo: 1, addedRowCount: rowCount, cancellationToken);
+        await UpdateRowCountsAsync(connection, transaction, projectId, batchId, sourceNo: 1, addedRowCount: rowCount, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         txLog.Committed();
         DiagnosticDbLog.ImportMilestone(_log, "replace", rowCount, importStopwatch.ElapsedMilliseconds,
@@ -162,16 +160,15 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
         int existingRowCount;
         IReadOnlyList<string> batchColumns;
 
-        await using (var findBatch = connection.CreateCommand())
-        {
-            findBatch.Transaction = transaction;
-            findBatch.CommandText =
-                """
+        await using (var findBatch = database.CreateCommand(connection, projectId,
+            """
                 SELECT TOP 1 batch_id, source_file_name, imported_utc, row_count, columns_json
-                FROM import_batch
+                FROM {s}.import_batch
                 WHERE dataset_kind = @kind
                 ORDER BY imported_utc DESC, batch_id DESC;
-                """;
+                """))
+        {
+            findBatch.Transaction = transaction;
             findBatch.Parameters.AddWithValue("@kind", kindName);
 
             await using var reader = await findBatch.ExecuteReaderLoggedAsync(_log, Provider, cancellationToken);
@@ -197,15 +194,14 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
         int nextSourceNo;
         long nextRowNumber;
 
-        await using (var maxQuery = connection.CreateCommand())
+        await using (var maxQuery = database.CreateCommand(connection, projectId,
+            $$"""
+                SELECT
+                    (SELECT COALESCE(MAX(source_no), 0) FROM {s}.import_batch_source WHERE batch_id = @batchId),
+                    (SELECT COALESCE(MAX(row_number), 0) FROM {s}.{{stagingTable}} WHERE batch_id = @batchId);
+                """))
         {
             maxQuery.Transaction = transaction;
-            maxQuery.CommandText =
-                $"""
-                SELECT
-                    (SELECT COALESCE(MAX(source_no), 0) FROM import_batch_source WHERE batch_id = @batchId),
-                    (SELECT COALESCE(MAX(row_number), 0) FROM {stagingTable} WHERE batch_id = @batchId);
-                """;
             maxQuery.Parameters.AddWithValue("@batchId", batchId);
 
             await using var reader = await maxQuery.ExecuteReaderLoggedAsync(_log, Provider, cancellationToken);
@@ -214,11 +210,11 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
             nextRowNumber = reader.GetInt64(1) + 1;
         }
 
-        await InsertSourceRecordAsync(connection, transaction, batchId, nextSourceNo, source, importedUtc, cancellationToken);
+        await InsertSourceRecordAsync(connection, transaction, projectId, batchId, nextSourceNo, source, importedUtc, cancellationToken);
 
         var bulkStopwatch = Stopwatch.StartNew();
         var (addedRowCount, observedKeys) = await BulkCopyStagingAsync(
-            connection, transaction, stagingTable, batchId, nextSourceNo,
+            connection, transaction, projectId, stagingTable, batchId, nextSourceNo,
             isAppend: true, appendStartRowNumber: nextRowNumber, rows, cancellationToken);
         bulkStopwatch.Stop();
 
@@ -246,25 +242,24 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
             throw;
         }
 
-        await UpdateRowCountsAsync(connection, transaction, batchId, nextSourceNo, addedRowCount, cancellationToken);
+        await UpdateRowCountsAsync(connection, transaction, projectId, batchId, nextSourceNo, addedRowCount, cancellationToken);
 
         // 附加使下游失效(與 replace 同語意):母體變了,target 投影與已提交配對必須重做。
-        await using (var invalidate = connection.CreateCommand())
+        await using (var invalidate = database.CreateCommand(connection, projectId,
+            $$"""
+                DELETE FROM {s}.{{targetTable}};
+                DELETE FROM {s}.config_field_mapping WHERE dataset_kind = @kind;
+                """))
         {
             invalidate.Transaction = transaction;
             invalidate.CommandTimeout = 0; // 附加使下游失效時 DELETE 百萬列 target,屬長批次,不設 30s 逾時
-            invalidate.CommandText =
-                $"""
-                DELETE FROM {targetTable};
-                DELETE FROM config_field_mapping WHERE dataset_kind = @kind;
-                """;
             invalidate.Parameters.AddWithValue("@kind", kindName);
             await invalidate.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 
-        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken);
+        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
-        var sources = await LoadSourcesAsync(connection, transaction, batchId, cancellationToken);
+        var sources = await LoadSourcesAsync(connection, transaction, projectId, batchId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         txLog.Committed();
         DiagnosticDbLog.ImportMilestone(_log, "append", addedRowCount, importStopwatch.ElapsedMilliseconds,
@@ -293,15 +288,14 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
         int rowCount;
         IReadOnlyList<string> columns;
 
-        await using (var command = connection.CreateCommand())
-        {
-            command.CommandText =
-                """
+        await using (var command = database.CreateCommand(connection, projectId,
+            """
                 SELECT TOP 1 batch_id, source_file_name, imported_utc, row_count, columns_json
-                FROM import_batch
+                FROM {s}.import_batch
                 WHERE dataset_kind = @kind
                 ORDER BY imported_utc DESC, batch_id DESC;
-                """;
+                """))
+        {
             command.Parameters.AddWithValue("@kind", kind.ToStorageName());
 
             await using var reader = await command.ExecuteReaderLoggedAsync(_log, Provider, cancellationToken);
@@ -317,27 +311,27 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
             columns = JsonSerializer.Deserialize<List<string>>(reader.GetString(4), JsonOptions) ?? [];
         }
 
-        var sources = await LoadSourcesAsync(connection, transaction: null, batchId, cancellationToken);
+        var sources = await LoadSourcesAsync(connection, transaction: null, projectId, batchId, cancellationToken);
         return new ImportBatchInfo(batchId, kind, fileName, importedUtc, rowCount, columns, sources);
     }
 
     private async Task InsertSourceRecordAsync(
         SqlConnection connection,
         SqlTransaction transaction,
+        string projectId,
         string batchId,
         int sourceNo,
         ImportSourceDescriptor source,
         DateTimeOffset importedUtc,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
-            INSERT INTO import_batch_source
+            INSERT INTO {s}.import_batch_source
                 (batch_id, source_no, source_file_path, source_file_name, sheet_name, encoding, delimiter, row_count, imported_utc)
             VALUES (@batchId, @sourceNo, @filePath, @fileName, @sheetName, @encoding, @delimiter, 0, @importedUtc);
-            """;
+            """);
+        command.Transaction = transaction;
         command.Parameters.AddWithValue("@batchId", batchId);
         command.Parameters.AddWithValue("@sourceNo", sourceNo);
         command.Parameters.AddWithValue("@filePath", source.FilePath);
@@ -359,6 +353,7 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
     private static async Task<(int RowCount, HashSet<string> ObservedKeys)> BulkCopyStagingAsync(
         SqlConnection connection,
         SqlTransaction transaction,
+        string projectId,
         string stagingTable,
         string batchId,
         int sourceNo,
@@ -407,9 +402,10 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
         try
         {
             using var reader = new StagingBulkCopyDataReader(channel.Reader, batchId, sourceNo);
+            var schema = SqlServerProjectSchema.For(projectId);
             using var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction)
             {
-                DestinationTableName = $"dbo.{stagingTable}",
+                DestinationTableName = $"[{schema}].[{stagingTable}]",
                 EnableStreaming = true,
                 BulkCopyTimeout = 0, // 大資料路徑不設逾時(對齊 GL 投影)
             };
@@ -442,18 +438,18 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
     private async Task UpdateRowCountsAsync(
         SqlConnection connection,
         SqlTransaction transaction,
+        string projectId,
         string batchId,
         int sourceNo,
         int addedRowCount,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
-            UPDATE import_batch_source SET row_count = @added WHERE batch_id = @batchId AND source_no = @sourceNo;
-            UPDATE import_batch SET row_count = row_count + @added WHERE batch_id = @batchId;
-            """;
+            UPDATE {s}.import_batch_source SET row_count = @added WHERE batch_id = @batchId AND source_no = @sourceNo;
+            UPDATE {s}.import_batch SET row_count = row_count + @added WHERE batch_id = @batchId;
+            """);
+        command.Transaction = transaction;
         command.Parameters.AddWithValue("@added", addedRowCount);
         command.Parameters.AddWithValue("@batchId", batchId);
         command.Parameters.AddWithValue("@sourceNo", sourceNo);
@@ -463,18 +459,18 @@ public sealed class SqlServerImportRepository(SqlServerProjectDatabase database,
     private async Task<IReadOnlyList<ImportSourceInfo>> LoadSourcesAsync(
         SqlConnection connection,
         SqlTransaction? transaction,
+        string projectId,
         string batchId,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT source_no, source_file_name, sheet_name, encoding, delimiter, row_count, imported_utc
-            FROM import_batch_source
+            FROM {s}.import_batch_source
             WHERE batch_id = @batchId
             ORDER BY source_no;
-            """;
+            """);
+        command.Transaction = transaction;
         command.Parameters.AddWithValue("@batchId", batchId);
 
         var sources = new List<ImportSourceInfo>();

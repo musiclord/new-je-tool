@@ -17,9 +17,8 @@ public sealed class SqlServerCalendarExportRepository(SqlServerProjectDatabase d
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT date, day_name FROM staging_calendar_raw_day WHERE day_type = @type ORDER BY date;";
+        await using var command = database.CreateCommand(connection, projectId,
+            "SELECT date, day_name FROM {s}.staging_calendar_raw_day WHERE day_type = @type ORDER BY date;");
         command.Parameters.AddWithValue("@type", type.ToStorageName());
 
         var rows = new List<CalendarDayEntry>();

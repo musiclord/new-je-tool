@@ -21,7 +21,8 @@ public sealed class SqlServerDevDatabaseInspectorTests
 
         var overview = await inspector.GetOverviewAsync(project.ProjectId, CancellationToken.None);
 
-        Assert.Equal(SqlServerProjectDatabase.DatabaseName(project.ProjectId), overview.DatabasePath);
+        // schema-per-project:「位置」即該專案 schema 名(取代退役中的 per-database 庫名)。
+        Assert.Equal(SqlServerProjectSchema.For(project.ProjectId), overview.DatabasePath);
         Assert.True(overview.FileSizeBytes > 0);
         Assert.False(string.IsNullOrWhiteSpace(overview.EngineVersion));
         Assert.Contains(overview.Tables, table => table.Name == "dev_plain" && table.RowCount == 2);
@@ -67,19 +68,21 @@ public sealed class SqlServerDevDatabaseInspectorTests
     private static async Task SeedInspectorTablesAsync(
         SqlServerProjectDatabase database, string projectId)
     {
+        // schema-per-project:檢視只列該專案 schema 內的表,故 seed 也建在該 schema(EnsureCreated 已建 schema)。
+        var s = SqlServerProjectSchema.QualifierFor(projectId); // 例 [prj_xxx].
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync();
         await ExecuteNonQueryAsync(
             connection,
-            """
-            CREATE TABLE dbo.dev_plain (
+            $"""
+            CREATE TABLE {s}dev_plain (
                 id INT NOT NULL,
                 name NVARCHAR(100) NULL,
                 amount DECIMAL(10, 2) NULL
             );
-            INSERT INTO dbo.dev_plain (id, name, amount) VALUES (1, N'Alpha', 12.50), (2, NULL, NULL);
-            CREATE TABLE dbo.[dev]]quoted] (id INT NOT NULL);
-            INSERT INTO dbo.[dev]]quoted] (id) VALUES (7);
+            INSERT INTO {s}dev_plain (id, name, amount) VALUES (1, N'Alpha', 12.50), (2, NULL, NULL);
+            CREATE TABLE {s}[dev]]quoted] (id INT NOT NULL);
+            INSERT INTO {s}[dev]]quoted] (id) VALUES (7);
             """);
     }
 

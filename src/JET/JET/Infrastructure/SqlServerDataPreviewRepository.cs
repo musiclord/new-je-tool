@@ -49,25 +49,25 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
 
         return dataset switch
         {
-            DataPreviewDataset.GlStaging => await StagingPreviewAsync(connection, "gl", "staging_gl_raw_row", limit, cancellationToken),
-            DataPreviewDataset.TbStaging => await StagingPreviewAsync(connection, "tb", "staging_tb_raw_row", limit, cancellationToken),
-            DataPreviewDataset.GlEntries => await GlEntriesPreviewAsync(connection, moneyScale, limit, cancellationToken),
-            DataPreviewDataset.TbBalances => await TbBalancesPreviewAsync(connection, moneyScale, limit, cancellationToken),
-            DataPreviewDataset.AccountMappings => await AccountMappingsPreviewAsync(connection, limit, cancellationToken),
-            DataPreviewDataset.AuthorizedPreparers => await AuthorizedPreparersPreviewAsync(connection, limit, cancellationToken),
-            DataPreviewDataset.DateDimension => await DateDimensionPreviewAsync(connection, limit, cancellationToken),
+            DataPreviewDataset.GlStaging => await StagingPreviewAsync(connection, projectId, "gl", "staging_gl_raw_row", limit, cancellationToken),
+            DataPreviewDataset.TbStaging => await StagingPreviewAsync(connection, projectId, "tb", "staging_tb_raw_row", limit, cancellationToken),
+            DataPreviewDataset.GlEntries => await GlEntriesPreviewAsync(connection, projectId, moneyScale, limit, cancellationToken),
+            DataPreviewDataset.TbBalances => await TbBalancesPreviewAsync(connection, projectId, moneyScale, limit, cancellationToken),
+            DataPreviewDataset.AccountMappings => await AccountMappingsPreviewAsync(connection, projectId, limit, cancellationToken),
+            DataPreviewDataset.AuthorizedPreparers => await AuthorizedPreparersPreviewAsync(connection, projectId, limit, cancellationToken),
+            DataPreviewDataset.DateDimension => await DateDimensionPreviewAsync(connection, projectId, limit, cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(dataset), dataset, null)
         };
     }
 
     /// <summary>已匯入的事務所假日／補班日（依日期升冪；無統計）。</summary>
-    private static async Task<DataPreviewResult> DateDimensionPreviewAsync(
-        SqlConnection connection, int limit, CancellationToken cancellationToken)
+    private async Task<DataPreviewResult> DateDimensionPreviewAsync(
+        SqlConnection connection, string projectId, int limit, CancellationToken cancellationToken)
     {
         long totalCount;
-        await using (var count = connection.CreateCommand())
+        await using (var count = database.CreateCommand(connection, projectId,
+            "SELECT COUNT_BIG(*) FROM {s}.staging_calendar_raw_day;"))
         {
-            count.CommandText = "SELECT COUNT_BIG(*) FROM staging_calendar_raw_day;";
             totalCount = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
         }
 
@@ -76,14 +76,13 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
             return new DataPreviewResult([], [], 0, null);
         }
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT date, day_type, day_name
-            FROM staging_calendar_raw_day
+            FROM {s}.staging_calendar_raw_day
             ORDER BY date
             OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;
-            """;
+            """);
         command.Parameters.AddWithValue("@limit", limit);
 
         var rows = new List<IReadOnlyList<string?>>();
@@ -101,13 +100,13 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
         return new DataPreviewResult(DateDimensionColumns, rows, totalCount, null);
     }
 
-    private static async Task<DataPreviewResult> AccountMappingsPreviewAsync(
-        SqlConnection connection, int limit, CancellationToken cancellationToken)
+    private async Task<DataPreviewResult> AccountMappingsPreviewAsync(
+        SqlConnection connection, string projectId, int limit, CancellationToken cancellationToken)
     {
         long totalCount;
-        await using (var count = connection.CreateCommand())
+        await using (var count = database.CreateCommand(connection, projectId,
+            "SELECT COUNT_BIG(*) FROM {s}.target_account_mapping;"))
         {
-            count.CommandText = "SELECT COUNT_BIG(*) FROM target_account_mapping;";
             totalCount = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
         }
 
@@ -116,14 +115,13 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
             return new DataPreviewResult([], [], 0, null);
         }
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT account_code, account_name, standardized_category
-            FROM target_account_mapping
+            FROM {s}.target_account_mapping
             ORDER BY account_code
             OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;
-            """;
+            """);
         command.Parameters.AddWithValue("@limit", limit);
 
         var rows = new List<IReadOnlyList<string?>>();
@@ -136,13 +134,13 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
         return new DataPreviewResult(AccountMappingColumns, rows, totalCount, null);
     }
 
-    private static async Task<DataPreviewResult> AuthorizedPreparersPreviewAsync(
-        SqlConnection connection, int limit, CancellationToken cancellationToken)
+    private async Task<DataPreviewResult> AuthorizedPreparersPreviewAsync(
+        SqlConnection connection, string projectId, int limit, CancellationToken cancellationToken)
     {
         long totalCount;
-        await using (var count = connection.CreateCommand())
+        await using (var count = database.CreateCommand(connection, projectId,
+            "SELECT COUNT_BIG(*) FROM {s}.target_authorized_preparer;"))
         {
-            count.CommandText = "SELECT COUNT_BIG(*) FROM target_authorized_preparer;";
             totalCount = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
         }
 
@@ -151,14 +149,13 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
             return new DataPreviewResult([], [], 0, null);
         }
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT name
-            FROM target_authorized_preparer
+            FROM {s}.target_authorized_preparer
             ORDER BY name
             OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;
-            """;
+            """);
         command.Parameters.AddWithValue("@limit", limit);
 
         var rows = new List<IReadOnlyList<string?>>();
@@ -171,21 +168,20 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
         return new DataPreviewResult(AuthorizedPreparerColumns, rows, totalCount, null);
     }
 
-    private static async Task<DataPreviewResult> StagingPreviewAsync(
-        SqlConnection connection, string kindName, string stagingTable, int limit, CancellationToken cancellationToken)
+    private async Task<DataPreviewResult> StagingPreviewAsync(
+        SqlConnection connection, string projectId, string kindName, string stagingTable, int limit, CancellationToken cancellationToken)
     {
         string? batchId = null;
         List<string> columns = [];
 
-        await using (var findBatch = connection.CreateCommand())
+        await using (var findBatch = database.CreateCommand(connection, projectId,
+            """
+            SELECT TOP 1 batch_id, columns_json
+            FROM {s}.import_batch
+            WHERE dataset_kind = @kind
+            ORDER BY imported_utc DESC, batch_id DESC;
+            """))
         {
-            findBatch.CommandText =
-                """
-                SELECT TOP 1 batch_id, columns_json
-                FROM import_batch
-                WHERE dataset_kind = @kind
-                ORDER BY imported_utc DESC, batch_id DESC;
-                """;
             findBatch.Parameters.AddWithValue("@kind", kindName);
 
             await using var reader = await findBatch.ExecuteReaderAsync(cancellationToken);
@@ -202,24 +198,21 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
         }
 
         long totalCount;
-        await using (var count = connection.CreateCommand())
+        await using (var count = database.CreateCommand(connection, projectId,
+            "SELECT COUNT_BIG(*) FROM {s}." + stagingTable + " WHERE batch_id = @batchId;"))
         {
-            count.CommandText = $"SELECT COUNT_BIG(*) FROM {stagingTable} WHERE batch_id = @batchId;";
             count.Parameters.AddWithValue("@batchId", batchId);
             totalCount = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
         }
 
         var rows = new List<IReadOnlyList<string?>>();
-        await using (var select = connection.CreateCommand())
+        await using (var select = database.CreateCommand(connection, projectId,
+            "SELECT row_json " +
+            "FROM {s}." + stagingTable + " " +
+            "WHERE batch_id = @batchId " +
+            "ORDER BY row_number " +
+            "OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;"))
         {
-            select.CommandText =
-                $"""
-                SELECT row_json
-                FROM {stagingTable}
-                WHERE batch_id = @batchId
-                ORDER BY row_number
-                OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;
-                """;
             select.Parameters.AddWithValue("@batchId", batchId);
             select.Parameters.AddWithValue("@limit", limit);
 
@@ -235,25 +228,23 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
         return new DataPreviewResult(columns, rows, totalCount, null);
     }
 
-    private static async Task<DataPreviewResult> GlEntriesPreviewAsync(
-        SqlConnection connection, int moneyScale, int limit, CancellationToken cancellationToken)
+    private async Task<DataPreviewResult> GlEntriesPreviewAsync(
+        SqlConnection connection, string projectId, int moneyScale, int limit, CancellationToken cancellationToken)
     {
         long totalCount;
         GlEntriesPreviewStats? stats = null;
 
-        await using (var statsQuery = connection.CreateCommand())
+        await using (var statsQuery = database.CreateCommand(connection, projectId,
+            """
+            SELECT COUNT_BIG(*),
+                   COUNT_BIG(DISTINCT document_number),
+                   MIN(ABS(amount_scaled)),
+                   MAX(ABS(amount_scaled)),
+                   MIN(post_date),
+                   MAX(post_date)
+            FROM {s}.target_gl_entry;
+            """))
         {
-            statsQuery.CommandText =
-                """
-                SELECT COUNT_BIG(*),
-                       COUNT_BIG(DISTINCT document_number),
-                       MIN(ABS(amount_scaled)),
-                       MAX(ABS(amount_scaled)),
-                       MIN(post_date),
-                       MAX(post_date)
-                FROM target_gl_entry;
-                """;
-
             await using var reader = await statsQuery.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             totalCount = reader.GetInt64(0);
@@ -275,16 +266,15 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
         }
 
         var rows = new List<IReadOnlyList<string?>>();
-        await using (var select = connection.CreateCommand())
+        await using (var select = database.CreateCommand(connection, projectId,
+            """
+            SELECT document_number, line_item, post_date, account_code, account_name,
+                   document_description, amount_scaled, dr_cr
+            FROM {s}.target_gl_entry
+            ORDER BY entry_id
+            OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;
+            """))
         {
-            select.CommandText =
-                """
-                SELECT document_number, line_item, post_date, account_code, account_name,
-                       document_description, amount_scaled, dr_cr
-                FROM target_gl_entry
-                ORDER BY entry_id
-                OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;
-                """;
             select.Parameters.AddWithValue("@limit", limit);
 
             await using var reader = await select.ExecuteReaderAsync(cancellationToken);
@@ -307,13 +297,13 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
         return new DataPreviewResult(GlEntryColumns, rows, totalCount, stats);
     }
 
-    private static async Task<DataPreviewResult> TbBalancesPreviewAsync(
-        SqlConnection connection, int moneyScale, int limit, CancellationToken cancellationToken)
+    private async Task<DataPreviewResult> TbBalancesPreviewAsync(
+        SqlConnection connection, string projectId, int moneyScale, int limit, CancellationToken cancellationToken)
     {
         long totalCount;
-        await using (var count = connection.CreateCommand())
+        await using (var count = database.CreateCommand(connection, projectId,
+            "SELECT COUNT_BIG(*) FROM {s}.target_tb_balance;"))
         {
-            count.CommandText = "SELECT COUNT_BIG(*) FROM target_tb_balance;";
             totalCount = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
         }
 
@@ -323,15 +313,14 @@ public sealed class SqlServerDataPreviewRepository(SqlServerProjectDatabase data
         }
 
         var rows = new List<IReadOnlyList<string?>>();
-        await using (var select = connection.CreateCommand())
+        await using (var select = database.CreateCommand(connection, projectId,
+            """
+            SELECT account_code, account_name, change_amount_scaled
+            FROM {s}.target_tb_balance
+            ORDER BY balance_id
+            OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;
+            """))
         {
-            select.CommandText =
-                """
-                SELECT account_code, account_name, change_amount_scaled
-                FROM target_tb_balance
-                ORDER BY balance_id
-                OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY;
-                """;
             select.Parameters.AddWithValue("@limit", limit);
 
             await using var reader = await select.ExecuteReaderAsync(cancellationToken);

@@ -20,20 +20,22 @@ namespace JET.Infrastructure;
 /// </summary>
 internal static class TagMatrixRowPageReader
 {
-    private const string PageSqlHead =
+    // schemaPrefix 預設 ""（SQLite 裸名，逐字不變）；SQL Server 傳 QualifierFor(projectId) 前綴專案表名。
+    private static string PageSqlHead(string schemaPrefix) =>
         "SELECT g.document_number, g.line_item, g.post_date, g.approval_date, g.created_by, g.approved_by, " +
         "       g.account_code, g.account_name, g.amount_scaled, g.document_description, g.entry_id " +
-        "FROM target_gl_entry g " +
+        $"FROM {schemaPrefix}target_gl_entry g " +
         "WHERE g.document_number IN ( " +
-        "    SELECT DISTINCT g2.document_number FROM result_filter_run r " +
-        "    JOIN target_gl_entry g2 ON g2.entry_id = r.entry_id " +
+        $"    SELECT DISTINCT g2.document_number FROM {schemaPrefix}result_filter_run r " +
+        $"    JOIN {schemaPrefix}target_gl_entry g2 ON g2.entry_id = r.entry_id " +
         "    WHERE g2.document_number IS NOT NULL) ";
 
     private const string PageSqlTail =
         "ORDER BY g.entry_id ";
 
     public static async Task<(PageResult<RowTagRow> Page, IReadOnlyList<long> EntryIds, IReadOnlyDictionary<long, IReadOnlyList<int>> PositionsByEntry)> ReadAsync(
-        DbConnection connection, ISqlDialect dialect, PageRequest request, CancellationToken cancellationToken)
+        DbConnection connection, ISqlDialect dialect, PageRequest request, CancellationToken cancellationToken,
+        string schemaPrefix = "")
     {
         var hasCursor = PageCursor.TryDecode(request.Cursor, out var cursorKey);
         long? cursorEntryId = hasCursor ? long.Parse(cursorKey) : null;
@@ -46,7 +48,7 @@ internal static class TagMatrixRowPageReader
         {
             var keyset = cursorEntryId is not null ? "AND g.entry_id > @cursor " : string.Empty;
             command.CommandText =
-                PageSqlHead + keyset + PageSqlTail + dialect.LimitClause("@pageSize") + ";";
+                PageSqlHead(schemaPrefix) + keyset + PageSqlTail + dialect.LimitClause("@pageSize") + ";";
             if (cursorEntryId is not null)
             {
                 command.Parameters.Add(Param(command, "@cursor", cursorEntryId.Value));
@@ -93,7 +95,7 @@ internal static class TagMatrixRowPageReader
         {
             var lowBound = cursorEntryId is not null ? "AND entry_id > @lo " : string.Empty;
             command.CommandText =
-                "SELECT entry_id, scenario_position FROM result_filter_run " +
+                $"SELECT entry_id, scenario_position FROM {schemaPrefix}result_filter_run " +
                 "WHERE entry_id <= @hi " +
                 lowBound +
                 "ORDER BY entry_id, scenario_position;";

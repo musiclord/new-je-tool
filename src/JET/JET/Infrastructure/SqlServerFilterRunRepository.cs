@@ -38,17 +38,18 @@ public sealed class SqlServerFilterRunRepository(SqlServerProjectDatabase databa
             TrailingZeroThreshold.DefaultZerosThreshold, context.MoneyScale);
 
         var count = await ExecuteScalarAsync(
-            connection, scenario, context, zeroModulus, "COUNT_BIG(*)", cancellationToken);
+            connection, projectId, scenario, context, zeroModulus, "COUNT_BIG(*)", cancellationToken);
         var voucherCount = await ExecuteScalarAsync(
-            connection, scenario, context, zeroModulus, "COUNT_BIG(DISTINCT g.document_number)", cancellationToken);
+            connection, projectId, scenario, context, zeroModulus, "COUNT_BIG(DISTINCT g.document_number)", cancellationToken);
         var previewRows = await ReadPreviewRowsAsync(
-            connection, scenario, context, zeroModulus, cancellationToken);
+            connection, projectId, scenario, context, zeroModulus, cancellationToken);
 
         return new FilterPreviewResult(count, voucherCount, previewRows);
     }
 
     private async Task<long> ExecuteScalarAsync(
         SqlConnection connection,
+        string projectId,
         FilterScenarioSpec scenario,
         FilterRuleContext context,
         long zeroModulus,
@@ -56,8 +57,13 @@ public sealed class SqlServerFilterRunRepository(SqlServerProjectDatabase databa
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        var where = WhereBuilder.BuildWhere(command, scenario, context, zeroModulus);
-        command.CommandText = $"SELECT {selectExpression} FROM target_gl_entry g WHERE {where};";
+        var where = WhereBuilder.BuildWhere(command, scenario, context, zeroModulus, SqlServerProjectSchema.QualifierFor(projectId));
+        // {s} 由命令工廠收斂;WhereBuilder 需先綁到 command,故借工廠展開 token 後回填本命令。
+        await using (var expand = database.CreateCommand(connection, projectId,
+            $"SELECT {selectExpression} FROM {{s}}.target_gl_entry g WHERE {where};"))
+        {
+            command.CommandText = expand.CommandText;
+        }
 
         var result = await command.ExecuteScalarLoggedAsync(_log, Provider, cancellationToken);
         return result is null or DBNull ? 0L : Convert.ToInt64(result);
@@ -65,22 +71,27 @@ public sealed class SqlServerFilterRunRepository(SqlServerProjectDatabase databa
 
     private async Task<IReadOnlyList<FilterPreviewRow>> ReadPreviewRowsAsync(
         SqlConnection connection,
+        string projectId,
         FilterScenarioSpec scenario,
         FilterRuleContext context,
         long zeroModulus,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        var where = WhereBuilder.BuildWhere(command, scenario, context, zeroModulus);
-        command.CommandText =
-            $"""
-            SELECT TOP ({PreviewRowLimit})
+        var where = WhereBuilder.BuildWhere(command, scenario, context, zeroModulus, SqlServerProjectSchema.QualifierFor(projectId));
+        // {s} 由命令工廠收斂;WhereBuilder 需先綁到 command,故借工廠展開 token 後回填本命令。
+        await using (var expand = database.CreateCommand(connection, projectId,
+            $$"""
+            SELECT TOP ({{PreviewRowLimit}})
                    g.document_number, g.line_item, g.post_date, g.account_code,
                    g.account_name, g.document_description, g.amount_scaled, g.dr_cr
-            FROM target_gl_entry g
-            WHERE {where}
+            FROM {s}.target_gl_entry g
+            WHERE {{where}}
             ORDER BY g.entry_id;
-            """;
+            """))
+        {
+            command.CommandText = expand.CommandText;
+        }
 
         var rows = new List<FilterPreviewRow>();
         await using var reader = await command.ExecuteReaderLoggedAsync(_log, Provider, cancellationToken);

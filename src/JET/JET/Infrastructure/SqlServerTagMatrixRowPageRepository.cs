@@ -20,6 +20,6 @@ public sealed class SqlServerTagMatrixRowPageRepository(SqlServerProjectDatabase
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        return await TagMatrixRowPageReader.ReadAsync(connection, Dialect, request, cancellationToken);
+        return await TagMatrixRowPageReader.ReadAsync(connection, Dialect, request, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
     }
 }

@@ -66,7 +66,9 @@ public sealed class GlProjectionLoggingTests
         return (diagnostic, factory);
     }
 
-    private static void AssertGlProjectionLog(RingBufferLoggerProvider diagnostic, string expectedProvider, int expectedRows)
+    // schemaPrefix：SQL Server 端的專案表在 logged SQL 中以 [schema]. 限定（production 同），SQLite 端為 ""。
+    private static void AssertGlProjectionLog(
+        RingBufferLoggerProvider diagnostic, string expectedProvider, int expectedRows, string schemaPrefix = "")
     {
         var entries = diagnostic.Snapshot();
         var sql = entries.Where(e => e.EventName == "sql.executed").ToList();
@@ -75,8 +77,8 @@ public sealed class GlProjectionLoggingTests
         // 逐列 INSERT / bulk 不記事件（不隨母體列數成長，故 DualSpec 下事件數為常數 3）。
         Assert.Equal(3, sql.Count);
         Assert.All(sql, e => Assert.Equal(expectedProvider, e.Fields["provider"]?.ToString()));
-        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("DELETE FROM target_gl_entry"));
-        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("staging_gl_raw_row"));
+        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains($"DELETE FROM {schemaPrefix}target_gl_entry"));
+        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains($"{schemaPrefix}staging_gl_raw_row"));
         Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("line_item"));
 
         // transaction：begin + commit + 其間 SQL 共享同一 transaction_id
@@ -139,6 +141,7 @@ public sealed class GlProjectionLoggingTests
             Assert.Equal(3, result.ProjectedRowCount);
         }
 
-        AssertGlProjectionLog(diagnostic, "sqlServer", expectedRows: 3);
+        AssertGlProjectionLog(diagnostic, "sqlServer", expectedRows: 3,
+            SqlServerProjectSchema.QualifierFor(temp.ProjectId));
     }
 }

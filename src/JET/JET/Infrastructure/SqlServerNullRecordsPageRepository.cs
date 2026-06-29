@@ -24,28 +24,27 @@ public sealed class SqlServerNullRecordsPageRepository(SqlServerProjectDatabase 
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
         var predicate = NullRecordsCategoryPredicate.SqlServer(category);
+        var hasCursor = PageCursor.TryDecode(request.Cursor, out var cursorKey);
+        var keyset = hasCursor ? "AND entry_id > @cursor" : string.Empty;
+
+        await using var command = database.CreateCommand(connection, projectId,
+            "SELECT document_number, account_code, post_date, document_description, entry_id " +
+            "FROM {s}.target_gl_entry " +
+            "WHERE " + predicate + " " + keyset + " " +
+            "ORDER BY entry_id " + Dialect.LimitClause("@pageSize") + ";");
         if (category == NullRecordCategory.OutOfRangeDate)
         {
             command.Parameters.AddWithValue("@periodStart", periodStart);
             command.Parameters.AddWithValue("@periodEnd", periodEnd);
         }
 
-        var hasCursor = PageCursor.TryDecode(request.Cursor, out var cursorKey);
-        var keyset = hasCursor ? "AND entry_id > @cursor" : string.Empty;
         if (hasCursor)
         {
             command.Parameters.AddWithValue("@cursor", long.Parse(cursorKey));
         }
 
         command.Parameters.AddWithValue("@pageSize", request.ClampedPageSize);
-
-        command.CommandText =
-            "SELECT document_number, account_code, post_date, document_description, entry_id " +
-            "FROM target_gl_entry " +
-            "WHERE " + predicate + " " + keyset + " " +
-            "ORDER BY entry_id " + Dialect.LimitClause("@pageSize") + ";";
 
         var rows = new List<NullRecordRow>();
         long lastEntryId = 0;

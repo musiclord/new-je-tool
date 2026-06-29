@@ -71,6 +71,8 @@ EBWebView/
 !.env.example
 !.env.template
 appsettings.Development.json
+# JET 連線分層的本機 dev 覆寫無秘密（localhost / Integrated Security），入版控供團隊與 parity 測試共用
+!src/JET/JET/appsettings.Development.json
 
 # superpowers brainstorm 暫存（視覺夥伴 session），不入庫
 .superpowers/

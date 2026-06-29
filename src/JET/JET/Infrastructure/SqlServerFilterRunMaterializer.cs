@@ -32,10 +32,10 @@ public sealed class SqlServerFilterRunMaterializer(SqlServerProjectDatabase data
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
-        await using (var clear = connection.CreateCommand())
+        await using (var clear = database.CreateCommand(connection, projectId,
+            "DELETE FROM {s}.result_filter_run;"))
         {
             clear.Transaction = transaction;
-            clear.CommandText = "DELETE FROM result_filter_run;";
             await clear.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 
@@ -47,11 +47,15 @@ public sealed class SqlServerFilterRunMaterializer(SqlServerProjectDatabase data
         {
             await using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
-            var where = WhereBuilder.BuildWhere(insert, saved.Spec, context, zeroModulus);
+            var where = WhereBuilder.BuildWhere(insert, saved.Spec, context, zeroModulus, SqlServerProjectSchema.QualifierFor(projectId));
             insert.Parameters.AddWithValue("@scenarioPosition", saved.Position);
-            insert.CommandText =
-                "INSERT INTO result_filter_run (scenario_position, entry_id) " +
-                $"SELECT @scenarioPosition, g.entry_id FROM target_gl_entry g WHERE {where};";
+            // {s} 由命令工廠收斂(單一替換點);WhereBuilder 需先綁到 insert,故借工廠展開 token 後回填本命令。
+            await using (var expand = database.CreateCommand(connection, projectId,
+                "INSERT INTO {s}.result_filter_run (scenario_position, entry_id) " +
+                $"SELECT @scenarioPosition, g.entry_id FROM {{s}}.target_gl_entry g WHERE {where};"))
+            {
+                insert.CommandText = expand.CommandText;
+            }
             await insert.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 

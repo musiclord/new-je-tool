@@ -38,7 +38,7 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// tag 落在符合的那些分錄列上。借貸側判定統一 `amount_scaled >= 0` 屬借方
     /// （與 DrCr 推導及 §6.1 一致，2026-06-11 裁決）。ANSI 共通（EXISTS + IN）。
     /// </summary>
-    public string UnexpectedAccountPair(DbCommand command)
+    public string UnexpectedAccountPair(DbCommand command, string schemaPrefix = "")
     {
         var revenueRow = NextParam(command, AccountMappingCategories.Revenue);
         var counterpartRow = CategoryListParams(command);
@@ -46,18 +46,18 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
         var counterpartDoc = CategoryListParams(command);
 
         return $"""
-            (((EXISTS (SELECT 1 FROM target_account_mapping m
+            (((EXISTS (SELECT 1 FROM {schemaPrefix}target_account_mapping m
                        WHERE m.account_code = g.account_code AND m.standardized_category = {revenueRow})
                AND g.amount_scaled < 0)
-              OR (EXISTS (SELECT 1 FROM target_account_mapping m
+              OR (EXISTS (SELECT 1 FROM {schemaPrefix}target_account_mapping m
                           WHERE m.account_code = g.account_code AND m.standardized_category IN ({counterpartRow}))
                   AND g.amount_scaled >= 0))
-             AND EXISTS (SELECT 1 FROM target_gl_entry c
-                         JOIN target_account_mapping mc ON mc.account_code = c.account_code
+             AND EXISTS (SELECT 1 FROM {schemaPrefix}target_gl_entry c
+                         JOIN {schemaPrefix}target_account_mapping mc ON mc.account_code = c.account_code
                          WHERE c.document_number = g.document_number
                            AND mc.standardized_category = {revenueDoc} AND c.amount_scaled < 0)
-             AND EXISTS (SELECT 1 FROM target_gl_entry d
-                         JOIN target_account_mapping md ON md.account_code = d.account_code
+             AND EXISTS (SELECT 1 FROM {schemaPrefix}target_gl_entry d
+                         JOIN {schemaPrefix}target_account_mapping md ON md.account_code = d.account_code
                          WHERE d.document_number = g.document_number
                            AND md.standardized_category IN ({counterpartDoc}) AND d.amount_scaled >= 0))
             """;
@@ -74,9 +74,9 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// `amount_scaled >= 0` 屬借方側、`&lt; 0` 屬貸方側。錨定模式輸出
     /// 錨定分錄與同傳票的對方側分錄。ANSI 共通。
     /// </summary>
-    public string AccountPair(DbCommand command, string pairMode, string? debitCategory, string? creditCategory)
+    public string AccountPair(DbCommand command, string pairMode, string? debitCategory, string? creditCategory, string schemaPrefix = "")
     {
-        var side = CategorySides(command, debitCategory, creditCategory);
+        var side = CategorySides(command, debitCategory, creditCategory, schemaPrefix);
 
         return pairMode switch
         {
@@ -103,9 +103,9 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// 而非條件本身。ANSI 共通（EXISTS / NOT EXISTS，全參數綁定），SQLite 與 SQL Server 由構造等價。
     /// </summary>
     public string SpecialAccountCategoryPair(
-        DbCommand command, string pairMode, string? debitCategory, string? creditCategory)
+        DbCommand command, string pairMode, string? debitCategory, string? creditCategory, string schemaPrefix = "")
     {
-        var side = CategorySides(command, debitCategory, creditCategory);
+        var side = CategorySides(command, debitCategory, creditCategory, schemaPrefix);
 
         return pairMode switch
         {
@@ -126,7 +126,7 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// 抽出共用片段以消滅重複，但兩個述詞各自決定如何組合（含否定），故對外 SQL 行為互不影響。
     /// </summary>
     private CategorySidePredicates CategorySides(
-        DbCommand command, string? debitCategory, string? creditCategory)
+        DbCommand command, string? debitCategory, string? creditCategory, string schemaPrefix = "")
     {
         // 分類值正準化後才綁參數（DB 落地為正準大小寫；驗證已保證可正規化）。
         if (AccountMappingCategories.TryNormalize(debitCategory, out var canonicalDebit))
@@ -141,7 +141,7 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
 
         string RowIsDebitSide() =>
             $"""
-            (EXISTS (SELECT 1 FROM target_account_mapping m
+            (EXISTS (SELECT 1 FROM {schemaPrefix}target_account_mapping m
                      WHERE m.account_code = g.account_code
                        AND m.standardized_category = {NextParam(command, debitCategory!)})
              AND g.amount_scaled >= 0)
@@ -149,7 +149,7 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
 
         string RowIsCreditSide() =>
             $"""
-            (EXISTS (SELECT 1 FROM target_account_mapping m
+            (EXISTS (SELECT 1 FROM {schemaPrefix}target_account_mapping m
                      WHERE m.account_code = g.account_code
                        AND m.standardized_category = {NextParam(command, creditCategory!)})
              AND g.amount_scaled < 0)
@@ -157,8 +157,8 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
 
         string DocHasDebitSide() =>
             $"""
-            EXISTS (SELECT 1 FROM target_gl_entry d
-                    JOIN target_account_mapping md ON md.account_code = d.account_code
+            EXISTS (SELECT 1 FROM {schemaPrefix}target_gl_entry d
+                    JOIN {schemaPrefix}target_account_mapping md ON md.account_code = d.account_code
                     WHERE d.document_number = g.document_number
                       AND md.standardized_category = {NextParam(command, debitCategory!)}
                       AND d.amount_scaled >= 0)
@@ -166,8 +166,8 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
 
         string DocHasCreditSide() =>
             $"""
-            EXISTS (SELECT 1 FROM target_gl_entry c
-                    JOIN target_account_mapping mc ON mc.account_code = c.account_code
+            EXISTS (SELECT 1 FROM {schemaPrefix}target_gl_entry c
+                    JOIN {schemaPrefix}target_account_mapping mc ON mc.account_code = c.account_code
                     WHERE c.document_number = g.document_number
                       AND mc.standardized_category = {NextParam(command, creditCategory!)}
                       AND c.amount_scaled < 0)
@@ -198,22 +198,22 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     }
 
     /// <summary>週末過帳/核准（weekend_*）：週六/週日且非補班日。dateColumn 僅接受本層常數。</summary>
-    public string Weekend(string dateColumn, IReadOnlyList<int>? nonWorkingDays)
+    public string Weekend(string dateColumn, IReadOnlyList<int>? nonWorkingDays, string schemaPrefix = "")
     {
         return $"""
             ({dialect.WeekendPredicate($"g.{dateColumn}", NonWorkingDays.Resolve(nonWorkingDays))}
              AND NOT EXISTS (
-                 SELECT 1 FROM staging_calendar_raw_day d
+                 SELECT 1 FROM {schemaPrefix}staging_calendar_raw_day d
                  WHERE d.day_type = 'makeup' AND d.date = g.{dateColumn}))
             """;
     }
 
     /// <summary>假日過帳/核准（holiday_*）：日期落在已上傳的假日曆。</summary>
-    public string Holiday(string dateColumn)
+    public string Holiday(string dateColumn, string schemaPrefix = "")
     {
         return $"""
             EXISTS (
-                SELECT 1 FROM staging_calendar_raw_day d
+                SELECT 1 FROM {schemaPrefix}staging_calendar_raw_day d
                 WHERE d.day_type = 'holiday' AND d.date = g.{dateColumn})
             """;
     }
@@ -234,26 +234,26 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// 前綴 EXISTS 自保:授權清單為空時 `x NOT IN (空集合)` 會反轉成全命中,
     /// 故名單空 → 整體述詞 FALSE(無命中,與 prescreen.run 的 na 語意對齊),
     /// 即便 validator/handler 閘控被繞過仍安全。</summary>
-    public string NonAuthorizedPreparer() =>
-        "(EXISTS (SELECT 1 FROM target_authorized_preparer) " +
+    public string NonAuthorizedPreparer(string schemaPrefix = "") =>
+        $"(EXISTS (SELECT 1 FROM {schemaPrefix}target_authorized_preparer) " +
         "AND g.created_by IS NOT NULL AND TRIM(g.created_by) <> '' " +
-        "AND TRIM(g.created_by) NOT IN (SELECT name FROM target_authorized_preparer))";
+        $"AND TRIM(g.created_by) NOT IN (SELECT name FROM {schemaPrefix}target_authorized_preparer))";
 
     /// <summary>低頻編製者(low_frequency_preparer,C6):created_by 全期分錄筆數 ≤ maxEntries。
     /// 門檻參數綁定;子查詢 GROUP BY/HAVING/COUNT(*) 皆 ANSI 共通,雙 provider 相同。</summary>
-    public string LowFrequencyPreparer(DbCommand command, int maxEntries)
+    public string LowFrequencyPreparer(DbCommand command, int maxEntries, string schemaPrefix = "")
     {
         var p = NextParam(command, maxEntries);
-        return $"g.created_by IN (SELECT created_by FROM target_gl_entry GROUP BY created_by HAVING COUNT(*) <= {p})";
+        return $"g.created_by IN (SELECT created_by FROM {schemaPrefix}target_gl_entry GROUP BY created_by HAVING COUNT(*) <= {p})";
     }
 
     /// <summary>低頻科目(low_frequency_account,C9):account_code 全期分錄筆數 ≤ maxEntries。
     /// 門檻參數綁定;子查詢 GROUP BY/HAVING/COUNT(*) 皆 ANSI 共通,雙 provider 相同。
     /// 與 rareAccounts(R6 彙總)並存,本述詞為其可作列述詞的版本。</summary>
-    public string LowFrequencyAccount(DbCommand command, int maxEntries)
+    public string LowFrequencyAccount(DbCommand command, int maxEntries, string schemaPrefix = "")
     {
         var p = NextParam(command, maxEntries);
-        return $"g.account_code IN (SELECT account_code FROM target_gl_entry GROUP BY account_code HAVING COUNT(*) <= {p})";
+        return $"g.account_code IN (SELECT account_code FROM {schemaPrefix}target_gl_entry GROUP BY account_code HAVING COUNT(*) <= {p})";
     }
 
     /// <summary>filter text 條件：關鍵字以 OR 串接；NOT 模式整體取反（COALESCE 保住 NULL 列）。</summary>
@@ -332,7 +332,7 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// 邊界參數綁定。視窗為空(X 非法或與期間無交集)→ 零命中。需科目配對已匯入。ANSI 共通。
     /// </summary>
     public string RevenueDebitNearQuarterEnd(
-        DbCommand command, IReadOnlyList<QuarterEndWindows.Window> windows)
+        DbCommand command, IReadOnlyList<QuarterEndWindows.Window> windows, string schemaPrefix = "")
     {
         if (windows.Count == 0)
         {
@@ -344,7 +344,7 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
             $"(g.post_date >= {NextParam(command, w.FromIso)} AND g.post_date <= {NextParam(command, w.ToIso)})"));
 
         return $"""
-            (EXISTS (SELECT 1 FROM target_account_mapping m
+            (EXISTS (SELECT 1 FROM {schemaPrefix}target_account_mapping m
                      WHERE m.account_code = g.account_code AND m.standardized_category = {revenue})
              AND g.amount_scaled >= 0
              AND ({windowClauses}))
@@ -357,19 +357,19 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// {Receivables, Receipt in advance}」的分錄(不含 Cash)——unexpected_account_pair 的否定面。
     /// ANSI 共通(EXISTS + NOT EXISTS)。需科目配對已匯入。
     /// </summary>
-    public string RevenueWithoutNormalCounterpart(DbCommand command)
+    public string RevenueWithoutNormalCounterpart(DbCommand command, string schemaPrefix = "")
     {
         var revenue = NextParam(command, AccountMappingCategories.Revenue);
         var receivables = NextParam(command, AccountMappingCategories.Receivables);
         var receiptInAdvance = NextParam(command, AccountMappingCategories.ReceiptInAdvance);
 
         return $"""
-            (EXISTS (SELECT 1 FROM target_account_mapping m
+            (EXISTS (SELECT 1 FROM {schemaPrefix}target_account_mapping m
                      WHERE m.account_code = g.account_code AND m.standardized_category = {revenue})
              AND g.amount_scaled < 0
              AND NOT EXISTS (
-                 SELECT 1 FROM target_gl_entry d
-                 JOIN target_account_mapping md ON md.account_code = d.account_code
+                 SELECT 1 FROM {schemaPrefix}target_gl_entry d
+                 JOIN {schemaPrefix}target_account_mapping md ON md.account_code = d.account_code
                  WHERE d.document_number = g.document_number
                    AND d.amount_scaled >= 0
                    AND md.standardized_category IN ({receivables}, {receiptInAdvance})))
@@ -380,11 +380,11 @@ public sealed class GlRulePredicates(ISqlDialect dialect)
     /// 收入之人工分錄(manual_revenue_entry,KCT 清單 D):科目分類 = Revenue 且 is_manual = 1
     /// (來源未提供人工旗標的列為 NULL,永不匹配,同 manualAuto)。需科目配對已匯入。ANSI 共通。
     /// </summary>
-    public string ManualRevenueEntry(DbCommand command)
+    public string ManualRevenueEntry(DbCommand command, string schemaPrefix = "")
     {
         var revenue = NextParam(command, AccountMappingCategories.Revenue);
         return $"""
-            (EXISTS (SELECT 1 FROM target_account_mapping m
+            (EXISTS (SELECT 1 FROM {schemaPrefix}target_account_mapping m
                      WHERE m.account_code = g.account_code AND m.standardized_category = {revenue})
              AND g.is_manual = 1)
             """;

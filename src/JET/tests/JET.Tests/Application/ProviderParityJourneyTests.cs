@@ -1054,10 +1054,12 @@ public sealed class ProviderParityJourneyTests
         await using var sql = await TempSqlServerProject.TryCreateAsync();
         Assert.NotNull(sql); // ProbeConnectionString 已成功,建庫亦應成功
 
+        // SQL Server schema-per-project:直插裸名會解析到 dbo(不存在);用 QualifierFor 限定到專案 schema。
+        var sqlSchemaPrefix = SqlServerProjectSchema.QualifierFor(sql.ProjectId);
         await using (var seed = sql.Database.CreateConnection(sql.ProjectId))
         {
             await seed.OpenAsync();
-            await SeedGlStagingAsync(seed, batchId, seedRows);
+            await SeedGlStagingAsync(seed, batchId, seedRows, sqlSchemaPrefix);
         }
 
         await new SqlServerGlRepository(sql.Database).ProjectStagingToTargetAsync(
@@ -1067,7 +1069,7 @@ public sealed class ProviderParityJourneyTests
         await using (var read = sql.Database.CreateConnection(sql.ProjectId))
         {
             await read.OpenAsync();
-            sqlServerSequence = await ReadLineItemSequenceAsync(read);
+            sqlServerSequence = await ReadLineItemSequenceAsync(read, sqlSchemaPrefix);
         }
 
         // SQLite 路徑(同 staging、同 spec)
@@ -1119,9 +1121,13 @@ public sealed class ProviderParityJourneyTests
         },
         GlAmountMode.DualAmount);
 
-    /// <summary>播種 staging_gl_raw_row(SQL 為 ANSI,DbConnection 對兩 provider 通用)。</summary>
+    /// <summary>
+    /// 播種 staging_gl_raw_row。SQL 為 ANSI、DbConnection 對兩 provider 通用;表名前綴依 provider 給:
+    /// SQLite 走裸名(預設 <c>""</c>),SQL Server 走 schema 限定(<c>[prj_xxx].</c>,由 <see cref="SqlServerProjectSchema.QualifierFor"/> 衍生)。
+    /// </summary>
     private static async Task SeedGlStagingAsync(
-        DbConnection connection, string batchId, IReadOnlyList<(long RowNumber, string Doc)> rows)
+        DbConnection connection, string batchId, IReadOnlyList<(long RowNumber, string Doc)> rows,
+        string tablePrefix = "")
     {
         foreach (var (rowNumber, doc) in rows)
         {
@@ -1133,8 +1139,8 @@ public sealed class ProviderParityJourneyTests
 
             await using var command = connection.CreateCommand();
             command.CommandText =
-                """
-                INSERT INTO staging_gl_raw_row (batch_id, row_number, source_no, source_row_number, row_json)
+                $"""
+                INSERT INTO {tablePrefix}staging_gl_raw_row (batch_id, row_number, source_no, source_row_number, row_json)
                 VALUES (@batchId, @rowNumber, 1, @sourceRowNumber, @rowJson);
                 """;
             AddParam(command, "@batchId", batchId);
@@ -1145,14 +1151,18 @@ public sealed class ProviderParityJourneyTests
         }
     }
 
-    /// <summary>讀 (document_number, source_row_number, line_item),依文件/排序鍵還原(兩 provider 同查詢)。</summary>
-    private static async Task<List<(string?, long, string?)>> ReadLineItemSequenceAsync(DbConnection connection)
+    /// <summary>
+    /// 讀 (document_number, source_row_number, line_item),依文件/排序鍵還原(兩 provider 同查詢)。
+    /// 表名前綴依 provider 給:SQLite 裸名(預設 <c>""</c>)、SQL Server schema 限定(<c>[prj_xxx].</c>)。
+    /// </summary>
+    private static async Task<List<(string?, long, string?)>> ReadLineItemSequenceAsync(
+        DbConnection connection, string tablePrefix = "")
     {
         await using var command = connection.CreateCommand();
         command.CommandText =
-            """
+            $"""
             SELECT document_number, source_row_number, line_item
-            FROM target_gl_entry
+            FROM {tablePrefix}target_gl_entry
             ORDER BY document_number, source_row_number;
             """;
 

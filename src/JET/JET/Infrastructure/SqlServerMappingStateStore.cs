@@ -19,18 +19,17 @@ public sealed class SqlServerMappingStateStore(SqlServerProjectDatabase database
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
-            IF EXISTS (SELECT 1 FROM config_field_mapping WHERE dataset_kind = @kind)
-                UPDATE config_field_mapping
+            IF EXISTS (SELECT 1 FROM {s}.config_field_mapping WHERE dataset_kind = @kind)
+                UPDATE {s}.config_field_mapping
                    SET mapping_json = @mappingJson, mode_name = @modeName,
                        source_batch_id = @sourceBatchId, committed_utc = @committedUtc
                  WHERE dataset_kind = @kind;
             ELSE
-                INSERT INTO config_field_mapping (dataset_kind, mapping_json, mode_name, source_batch_id, committed_utc)
+                INSERT INTO {s}.config_field_mapping (dataset_kind, mapping_json, mode_name, source_batch_id, committed_utc)
                 VALUES (@kind, @mappingJson, @modeName, @sourceBatchId, @committedUtc);
-            """;
+            """);
         command.Parameters.AddWithValue("@kind", mapping.Kind.ToStorageName());
         command.Parameters.AddWithValue("@mappingJson", JsonSerializer.Serialize(mapping.Mapping, JsonOptions));
         command.Parameters.AddWithValue("@modeName", mapping.ModeName);
@@ -50,14 +49,13 @@ public sealed class SqlServerMappingStateStore(SqlServerProjectDatabase database
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
         // dataset_kind 為 PK,至多一列;不需分頁。
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT mapping_json, mode_name, source_batch_id, committed_utc
-            FROM config_field_mapping
+            FROM {s}.config_field_mapping
             WHERE dataset_kind = @kind;
-            """;
+            """);
         command.Parameters.AddWithValue("@kind", kind.ToStorageName());
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

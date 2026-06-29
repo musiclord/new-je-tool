@@ -1,6 +1,7 @@
 using System.Text.Json;
 using JET.Application;
 using JET.Domain;
+using JET.Infrastructure;
 using JET.Tests.Infrastructure;
 using Microsoft.Data.SqlClient;
 using Xunit;
@@ -134,8 +135,14 @@ public sealed class ProjectHandlersTests
         Assert.Contains("已存在", ex.Message);
     }
 
+    /// <summary>
+    /// schema-per-project 修掉了舊 DB-name 淨化碰撞 bug：schema = For(projectId) =
+    /// prj_ + sanitize + hash8(projectId)，兩個不同案名 → 不同 hash8 → 不同 schema（碰撞機率極低 ~2⁻³²）。
+    /// 故兩個「在舊單庫淨化模型下會撞同 JET_ 庫名」的案名（僅差一個空白），在新模型下兩案皆建立成功、
+    /// 且落在不同 schema。oracle：SqlServerProjectSchema.For 衍生規格（兩 schema 必不相等）+ 兩 project.json 皆落地。
+    /// </summary>
     [SqlServerFact]
-    public async Task Create_SqlServer_CaseNameSanitizationCollision_ThrowsAndKeepsFirst()
+    public async Task Create_SqlServer_PreviouslyCollidingCaseNames_BothSucceedInDistinctSchemas()
     {
         var connectionString = await TempSqlServerProject.ProbeConnectionStringAsync();
         if (connectionString is null)
@@ -151,25 +158,33 @@ public sealed class ProjectHandlersTests
               "periodStart": "2024-01-01", "periodEnd": "2024-12-31", "databaseProvider": "sqlServer" }
             """;
 
-        // 唯一 tag → 每輪不同的 JET_ 庫名(免跨輪殘留汙染);兩名僅差一個空白,淨化後相同 → 同庫名碰撞。
+        // 唯一 tag → 每輪不同的 schema（免跨輪殘留汙染）；兩名僅差一個空白，舊模型淨化後相同 → 舊會碰撞。
         var tag = Guid.NewGuid().ToString("N")[..8];
         var nameA = $"案 {tag}";
         var nameB = $"案{tag}";
 
-        await host.DispatchAsync("project.create", PayloadFor(nameA));
+        // 新模型規格：兩不同案名（即 projectId）→ 不同 hash8 → 不同 schema（碰撞機率極低 ~2⁻³²）。
+        Assert.NotEqual(SqlServerProjectSchema.For(nameA), SqlServerProjectSchema.For(nameB));
+
         try
         {
-            var ex = await Assert.ThrowsAsync<JetActionException>(
-                () => host.DispatchAsync("project.create", PayloadFor(nameB)));
-            Assert.Equal(JetErrorCodes.InvalidPayload, ex.Code);
+            var createdA = await host.DispatchAsync("project.create", PayloadFor(nameA));
+            var createdB = await host.DispatchAsync("project.create", PayloadFor(nameB));
 
-            // 第一案保留;第二案資料夾已回滾。
-            Assert.True(Directory.Exists(Path.Combine(host.ProjectsRoot, nameA)));
-            Assert.False(Directory.Exists(Path.Combine(host.ProjectsRoot, nameB)));
+            // 兩案皆建立成功（不再有第二案被擋的碰撞）。
+            Assert.True(createdA.GetProperty("ok").GetBoolean());
+            Assert.True(createdB.GetProperty("ok").GetBoolean());
+
+            // 兩 project.json 皆落地、各自獨立。
+            Assert.True(File.Exists(Path.Combine(host.ProjectsRoot, nameA, "project.json")));
+            Assert.True(File.Exists(Path.Combine(host.ProjectsRoot, nameB, "project.json")));
         }
         finally
         {
-            await TempSqlServerProject.DropDatabaseAsync(connectionString, nameA);
+            // schema-per-project：清掉兩案在共用單庫（測試 host 預設 JET_DEV）留下的 prj_xxx schema。
+            var db = new SqlServerProjectDatabase(new SqlServerConnectionOptions(connectionString));
+            await db.DeleteAsync(nameA, CancellationToken.None);
+            await db.DeleteAsync(nameB, CancellationToken.None);
         }
     }
 
@@ -326,16 +341,15 @@ public sealed class ProjectHandlersTests
             "project.create",
             CreatePayload.Insert(CreatePayload.LastIndexOf('}'), """, "databaseProvider": "sqlServer" """));
         var projectId = created.GetProperty("projectId").GetString()!;
-        var databaseName = $"JET_{projectId}";
 
         try
         {
-            Assert.True(await DatabaseExistsAsync(connectionString, databaseName)); // 建案已建庫
+            Assert.True(await SchemaExistsAsync(connectionString, projectId)); // 建案已建 schema
 
             await host.DispatchAsync("project.delete", $$"""{ "projectId": "{{projectId}}" }""");
 
-            // 庫被 DROP、資料夾移除。
-            Assert.False(await DatabaseExistsAsync(connectionString, databaseName));
+            // schema 被 DROP、資料夾移除。
+            Assert.False(await SchemaExistsAsync(connectionString, projectId));
             Assert.False(Directory.Exists(Path.Combine(host.ProjectsRoot, projectId)));
         }
         finally
@@ -375,7 +389,7 @@ public sealed class ProjectHandlersTests
         Assert.False(ProjectInList(await host.DispatchAsync("project.list"), projectId));
     }
 
-    /// <summary>B：SQL Server 建立(建庫)→載入(currentStep=1)→在清單→刪除(DROP DATABASE + 移除)。</summary>
+    /// <summary>B：SQL Server 建立(建 schema)→載入(currentStep=1)→在清單→刪除(DROP SCHEMA + 移除)。</summary>
     [SqlServerFact]
     public async Task Flow_SqlServer_CreateLoadListDelete_DropsDatabase()
     {
@@ -391,13 +405,12 @@ public sealed class ProjectHandlersTests
             "project.create",
             CreatePayload.Insert(CreatePayload.LastIndexOf('}'), """, "databaseProvider": "sqlServer" """));
         var projectId = created.GetProperty("projectId").GetString()!;
-        var databaseName = $"JET_{projectId}";
 
         try
         {
-            // 建立即在 LocalDB 建庫（連線已設定 → EnsureCreated 成功，不再卡在建立步驟）。
+            // 建立即在共用單庫建該專案 schema（連線已設定 → EnsureCreated 成功，不再卡在建立步驟）。
             Assert.True(created.GetProperty("ok").GetBoolean());
-            Assert.True(await DatabaseExistsAsync(connectionString, databaseName));
+            Assert.True(await SchemaExistsAsync(connectionString, projectId));
 
             var loaded = await host.DispatchAsync("project.load", $$"""{ "projectId": "{{projectId}}" }""");
             Assert.Equal(1, loaded.GetProperty("project").GetProperty("currentStep").GetInt32());
@@ -406,9 +419,9 @@ public sealed class ProjectHandlersTests
             var row = SingleProject(await host.DispatchAsync("project.list"), projectId);
             Assert.Equal("sqlServer", row.GetProperty("databaseProvider").GetString());
 
-            // 刪除 → JET_{projectId} 庫從 LocalDB 消失、清單移除、資料夾消失。
+            // 刪除 → 該專案 schema 從共用單庫消失、清單移除、資料夾消失。
             await host.DispatchAsync("project.delete", $$"""{ "projectId": "{{projectId}}" }""");
-            Assert.False(await DatabaseExistsAsync(connectionString, databaseName));
+            Assert.False(await SchemaExistsAsync(connectionString, projectId));
             Assert.False(Directory.Exists(Path.Combine(host.ProjectsRoot, projectId)));
             Assert.False(ProjectInList(await host.DispatchAsync("project.list"), projectId));
         }
@@ -483,14 +496,22 @@ public sealed class ProjectHandlersTests
             .Any(p => p.GetProperty("projectId").GetString() == projectId);
     }
 
-    private static async Task<bool> DatabaseExistsAsync(string baseConnectionString, string databaseName)
+    // schema-per-project 模型下,共用單庫即 AppCompositionRoot 的安全預設 JET_DEV(測試 host 未設 Sql:Database)。
+    private const string SingleDatabaseName = "JET_DEV";
+
+    /// <summary>
+    /// 該專案衍生的 schema 是否存在於共用單庫(SCHEMA_ID;schema 名以參數綁定)。
+    /// schema-per-project 模型:建案建 schema、刪案刪 schema,故「存在性」改以 schema 維度斷言(取代 per-DB 的 DB_ID)。
+    /// </summary>
+    private static async Task<bool> SchemaExistsAsync(string baseConnectionString, string projectId)
     {
-        await using var master = new SqlConnection(
-            new SqlConnectionStringBuilder(baseConnectionString) { InitialCatalog = "master" }.ConnectionString);
-        await master.OpenAsync();
-        await using var query = master.CreateCommand();
-        query.CommandText = "SELECT DB_ID(@name);";
-        query.Parameters.AddWithValue("@name", databaseName);
-        return await query.ExecuteScalarAsync() is not (null or DBNull);
+        var schema = SqlServerProjectSchema.For(projectId);
+        await using var connection = new SqlConnection(
+            new SqlConnectionStringBuilder(baseConnectionString) { InitialCatalog = SingleDatabaseName }.ConnectionString);
+        await connection.OpenAsync();
+        await using var query = connection.CreateCommand();
+        query.CommandText = "SELECT CASE WHEN SCHEMA_ID(@s) IS NULL THEN 0 ELSE 1 END;";
+        query.Parameters.AddWithValue("@s", schema);
+        return Convert.ToInt32(await query.ExecuteScalarAsync()) == 1;
     }
 }

@@ -20,17 +20,16 @@ public sealed class SqlServerCreatorSummaryExportRepository(SqlServerProjectData
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT COALESCE(created_by, ''),
                    COUNT_BIG(*),
                    COALESCE(SUM(debit_amount_scaled), 0),
                    COALESCE(SUM(credit_amount_scaled), 0)
-            FROM target_gl_entry
+            FROM {s}.target_gl_entry
             GROUP BY created_by
             ORDER BY COUNT_BIG(*) DESC, created_by;
-            """;
+            """);
 
         return await ReadRowsAsync(command, cancellationToken);
     }

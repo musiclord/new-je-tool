@@ -37,4 +37,16 @@ public static class ValidationSql
             WHERE tb.account_code IS NULL
         )
         """;
+
+    /// <summary>
+    /// 與 <see cref="CompletenessDiffCte"/> 同一份 CTE，但把兩個專案事實表（target_gl_entry、
+    /// target_tb_balance）前綴 <paramref name="schemaPrefix"/> 以支援 SQL Server schema-per-project。
+    /// 預設 <c>""</c> 即逐字等於 <see cref="CompletenessDiffCte"/>（SQLite 路徑仍直接用 const 常數，
+    /// 不需呼叫本方法）。CTE 文字為單一事實來源（此處僅就兩個 FROM 子句加限定詞，不複製 SQL 主體）。
+    /// SQL Server 呼叫端傳 <see cref="SqlServerProjectSchema.QualifierFor"/> 的結果。
+    /// </summary>
+    public static string CompletenessDiffCteFor(string schemaPrefix) =>
+        CompletenessDiffCte
+            .Replace("FROM target_gl_entry", $"FROM {schemaPrefix}target_gl_entry")
+            .Replace("FROM target_tb_balance", $"FROM {schemaPrefix}target_tb_balance");
 }

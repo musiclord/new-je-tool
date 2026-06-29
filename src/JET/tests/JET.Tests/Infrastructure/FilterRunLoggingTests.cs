@@ -39,7 +39,9 @@ public sealed class FilterRunLoggingTests
         return (diagnostic, factory);
     }
 
-    private static void AssertFilterSql(RingBufferLoggerProvider diagnostic, string expectedProvider)
+    // schemaPrefix：SQL Server 端的專案表在 logged SQL 中以 [schema]. 限定（production 同），SQLite 端為 ""。
+    private static void AssertFilterSql(
+        RingBufferLoggerProvider diagnostic, string expectedProvider, string schemaPrefix = "")
     {
         var sql = diagnostic.Snapshot().Where(e => e.EventName == "sql.executed").ToList();
         Assert.NotEmpty(sql);
@@ -47,7 +49,7 @@ public sealed class FilterRunLoggingTests
         Assert.All(sql, e => Assert.True(Convert.ToInt64(e.Fields["duration_ms"]) >= 0));
         Assert.All(sql, e => Assert.Equal(-1, Convert.ToInt32(e.Fields["rows_affected"]))); // SELECT → -1（非寫入）
         // 預覽下兩種 SELECT：COUNT 與逐欄預覽，皆作用於 target_gl_entry
-        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("FROM target_gl_entry"));
+        Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains($"FROM {schemaPrefix}target_gl_entry"));
         Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("document_number"));
         // 動態 WHERE 的使用者值參數綁定（WhereBuilder 落地處）→ parameters 含可辨識下限值
         Assert.Contains(sql, e => e.Fields["parameters"]!.ToString()!.Contains(DistinctiveAmount.ToString()));
@@ -88,6 +90,6 @@ public sealed class FilterRunLoggingTests
             await repo.PreviewAsync(temp.ProjectId, AmountFromScenario(), Context, CancellationToken.None);
         }
 
-        AssertFilterSql(diagnostic, "sqlServer");
+        AssertFilterSql(diagnostic, "sqlServer", SqlServerProjectSchema.QualifierFor(temp.ProjectId));
     }
 }

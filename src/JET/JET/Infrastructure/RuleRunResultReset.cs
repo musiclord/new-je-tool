@@ -20,15 +20,16 @@ internal static class RuleRunResultReset
     public static async Task ClearWithinAsync(
         DbConnection connection,
         DbTransaction transaction,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string schemaPrefix = "")
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            """
-            DELETE FROM result_rule_run;
-            DELETE FROM result_inf_sampling_test_sample;
-            DELETE FROM result_filter_run;
+            $"""
+            DELETE FROM {schemaPrefix}result_rule_run;
+            DELETE FROM {schemaPrefix}result_inf_sampling_test_sample;
+            DELETE FROM {schemaPrefix}result_filter_run;
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

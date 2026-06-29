@@ -56,10 +56,11 @@ public sealed class SqlServerGlRepositoryTests
         }
 
         const string batchId = "b1";
+        var s = SqlServerProjectSchema.QualifierFor(sql.ProjectId);
         await using (var seed = sql.Database.CreateConnection(sql.ProjectId))
         {
             await seed.OpenAsync();
-            await SeedGlStagingAsync(seed, batchId, ValidFixture());
+            await SeedGlStagingAsync(seed, batchId, ValidFixture(), s);
         }
 
         var repo = new SqlServerGlRepository(sql.Database);
@@ -71,7 +72,7 @@ public sealed class SqlServerGlRepositoryTests
 
         await using var read = sql.Database.CreateConnection(sql.ProjectId);
         await read.OpenAsync();
-        var rows = await ReadTargetAsync(read);
+        var rows = await ReadTargetAsync(read, s);
 
         Assert.Equal(4, rows.Count);
         // 規格手算 oracle(值＋身分)
@@ -93,11 +94,12 @@ public sealed class SqlServerGlRepositoryTests
         }
 
         const string batchId = "b1";
+        var s = SqlServerProjectSchema.QualifierFor(sql.ProjectId);
         await using (var seed = sql.Database.CreateConnection(sql.ProjectId))
         {
             await seed.OpenAsync();
-            await SeedRuleRunAsync(seed);
-            await SeedGlStagingAsync(seed, batchId, ValidFixture());
+            await SeedRuleRunAsync(seed, s);
+            await SeedGlStagingAsync(seed, batchId, ValidFixture(), s);
         }
 
         var repo = new SqlServerGlRepository(sql.Database);
@@ -106,7 +108,7 @@ public sealed class SqlServerGlRepositoryTests
 
         await using var read = sql.Database.CreateConnection(sql.ProjectId);
         await read.OpenAsync();
-        Assert.Equal(0, await ScalarAsync(read, "SELECT COUNT(*) FROM result_rule_run;"));
+        Assert.Equal(0, await ScalarAsync(read, $"SELECT COUNT(*) FROM {s}result_rule_run;"));
     }
 
     [SqlServerFact]
@@ -119,14 +121,15 @@ public sealed class SqlServerGlRepositoryTests
         }
 
         const string batchId = "b1";
+        var s = SqlServerProjectSchema.QualifierFor(sql.ProjectId);
         var rows = ValidFixture();
         rows.Add(new GlSeedRow(5, 5, Row("JV-004", "2025-03-08", "1101", "現金", "壞金額", "not-a-number")));
 
         await using (var seed = sql.Database.CreateConnection(sql.ProjectId))
         {
             await seed.OpenAsync();
-            await SeedRuleRunAsync(seed); // 預存結果:rollback 後須仍在(原子性)
-            await SeedGlStagingAsync(seed, batchId, rows);
+            await SeedRuleRunAsync(seed, s); // 預存結果:rollback 後須仍在(原子性)
+            await SeedGlStagingAsync(seed, batchId, rows, s);
         }
 
         var repo = new SqlServerGlRepository(sql.Database);
@@ -140,8 +143,8 @@ public sealed class SqlServerGlRepositoryTests
         await using var read = sql.Database.CreateConnection(sql.ProjectId);
         await read.OpenAsync();
         // 整批 rollback:target 空,且預存結果隨同一交易回退而保留(無半態)。
-        Assert.Equal(0, await ScalarAsync(read, "SELECT COUNT(*) FROM target_gl_entry;"));
-        Assert.Equal(1, await ScalarAsync(read, "SELECT COUNT(*) FROM result_rule_run;"));
+        Assert.Equal(0, await ScalarAsync(read, $"SELECT COUNT(*) FROM {s}target_gl_entry;"));
+        Assert.Equal(1, await ScalarAsync(read, $"SELECT COUNT(*) FROM {s}result_rule_run;"));
     }
 
     [SqlServerFact]
@@ -173,11 +176,12 @@ public sealed class SqlServerGlRepositoryTests
             ["name"] = "x", ["desc"] = "y", ["debit"] = "6720", ["credit"] = "6720"
         };
 
+        var s = SqlServerProjectSchema.QualifierFor(sql.ProjectId);
         await using (var seed = sql.Database.CreateConnection(sql.ProjectId))
         {
             await seed.OpenAsync();
-            await SeedRuleRunAsync(seed); // 預存結果:rollback 後須保留(原子性)
-            await SeedGlStagingAsync(seed, batchId, [new GlSeedRow(1, 1, R("1101")), new GlSeedRow(2, 2, R("4101"))]);
+            await SeedRuleRunAsync(seed, s); // 預存結果:rollback 後須保留(原子性)
+            await SeedGlStagingAsync(seed, batchId, [new GlSeedRow(1, 1, R("1101")), new GlSeedRow(2, 2, R("4101"))], s);
         }
 
         var repo = new SqlServerGlRepository(sql.Database);
@@ -188,8 +192,8 @@ public sealed class SqlServerGlRepositoryTests
 
         await using var read = sql.Database.CreateConnection(sql.ProjectId);
         await read.OpenAsync();
-        Assert.Equal(0, await ScalarAsync(read, "SELECT COUNT(*) FROM target_gl_entry;"));
-        Assert.Equal(1, await ScalarAsync(read, "SELECT COUNT(*) FROM result_rule_run;"));
+        Assert.Equal(0, await ScalarAsync(read, $"SELECT COUNT(*) FROM {s}target_gl_entry;"));
+        Assert.Equal(1, await ScalarAsync(read, $"SELECT COUNT(*) FROM {s}result_rule_run;"));
     }
 
     /// <summary>
@@ -231,11 +235,12 @@ public sealed class SqlServerGlRepositoryTests
             return v;
         }
 
+        var s = SqlServerProjectSchema.QualifierFor(sql.ProjectId);
         await using (var seed = sql.Database.CreateConnection(sql.ProjectId))
         {
             await seed.OpenAsync();
             await SeedGlStagingAsync(seed, batchId,
-                [new GlSeedRow(1, 1, R("1101", "100", null)), new GlSeedRow(2, 2, R("4101", null, "100"))]);
+                [new GlSeedRow(1, 1, R("1101", "100", null)), new GlSeedRow(2, 2, R("4101", null, "100"))], s);
         }
 
         var repo = new SqlServerGlRepository(sql.Database);
@@ -262,11 +267,12 @@ public sealed class SqlServerGlRepositoryTests
         const string batchId = "b1";
         var fixture = ValidFixture();
 
-        // SQL Server 路徑
+        // SQL Server 路徑（專案表以 [schema]. 限定）。
+        var s = SqlServerProjectSchema.QualifierFor(sql.ProjectId);
         await using (var seed = sql.Database.CreateConnection(sql.ProjectId))
         {
             await seed.OpenAsync();
-            await SeedGlStagingAsync(seed, batchId, fixture);
+            await SeedGlStagingAsync(seed, batchId, fixture, s);
         }
 
         await new SqlServerGlRepository(sql.Database).ProjectStagingToTargetAsync(
@@ -276,7 +282,7 @@ public sealed class SqlServerGlRepositoryTests
         await using (var read = sql.Database.CreateConnection(sql.ProjectId))
         {
             await read.OpenAsync();
-            sqlServerRows = await ReadTargetAsync(read);
+            sqlServerRows = await ReadTargetAsync(read, s);
         }
 
         // SQLite 路徑(同 staging、同 spec)
@@ -873,14 +879,17 @@ public sealed class SqlServerGlRepositoryTests
 
     // ---- 共用 seed / read helper(DbConnection 對兩 provider 通用,SQL 為 ANSI) ----
 
-    private static async Task SeedGlStagingAsync(DbConnection connection, string batchId, IReadOnlyList<GlSeedRow> rows)
+    // schema-per-project：SQL Server 端的專案表須以 [schema]. 限定（schemaPrefix 由 SqlServerProjectSchema.QualifierFor
+    // 衍生、已白名單）；SQLite 端維持裸名（schemaPrefix 預設 ""）。
+    private static async Task SeedGlStagingAsync(
+        DbConnection connection, string batchId, IReadOnlyList<GlSeedRow> rows, string schemaPrefix = "")
     {
         foreach (var row in rows)
         {
             await using var command = connection.CreateCommand();
             command.CommandText =
-                """
-                INSERT INTO staging_gl_raw_row (batch_id, row_number, source_no, source_row_number, row_json)
+                $"""
+                INSERT INTO {schemaPrefix}staging_gl_raw_row (batch_id, row_number, source_no, source_row_number, row_json)
                 VALUES (@batchId, @rowNumber, 1, @sourceRowNumber, @rowJson);
                 """;
             AddParam(command, "@batchId", batchId);
@@ -891,12 +900,12 @@ public sealed class SqlServerGlRepositoryTests
         }
     }
 
-    private static async Task SeedRuleRunAsync(DbConnection connection)
+    private static async Task SeedRuleRunAsync(DbConnection connection, string schemaPrefix = "")
     {
         await using var command = connection.CreateCommand();
         command.CommandText =
-            """
-            INSERT INTO result_rule_run (run_id, run_kind, generated_utc, summary_json)
+            $$"""
+            INSERT INTO {{schemaPrefix}}result_rule_run (run_id, run_kind, generated_utc, summary_json)
             VALUES (@runId, 'validate', @utc, '{}');
             """;
         AddParam(command, "@runId", Guid.NewGuid().ToString("N"));
@@ -904,14 +913,14 @@ public sealed class SqlServerGlRepositoryTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<List<TargetRow>> ReadTargetAsync(DbConnection connection)
+    private static async Task<List<TargetRow>> ReadTargetAsync(DbConnection connection, string schemaPrefix = "")
     {
         await using var command = connection.CreateCommand();
         command.CommandText =
-            """
+            $"""
             SELECT source_row_number, document_number, account_code,
                    amount_scaled, debit_amount_scaled, credit_amount_scaled, dr_cr
-            FROM target_gl_entry
+            FROM {schemaPrefix}target_gl_entry
             ORDER BY source_row_number;
             """;
 
@@ -981,7 +990,10 @@ public sealed class SqlServerGlRepositoryTests
 }
 
 /// <summary>
-/// 測試用 SQL Server 暫時專案:每測試建唯一名 JET_{guid} 庫,Dispose 時 DROP。
+/// 測試用 SQL Server 暫時專案(schema-per-project 模型):所有測試共用獨立測試庫 JET_Test
+/// (與 dev 的 JET_DEV 隔離),每測試在其中建唯一的 prj_xxx schema;Dispose 時只 drop 該專案的 schema
+/// (走 <see cref="SqlServerProjectDatabase.DeleteAsync"/>:drop 表 → DROP SCHEMA → 刪 map 列),
+/// 共用的 JET_Test 庫不每測刪除(多測平行共用,殘留的只剩已清空 schema,無害)。
 /// TryCreateAsync 連不上 LocalDB 即回 null(呼叫端據此跳過)。
 /// </summary>
 internal sealed class TempSqlServerProject : IAsyncDisposable
@@ -989,13 +1001,10 @@ internal sealed class TempSqlServerProject : IAsyncDisposable
     private const string DefaultLocalDb =
         @"Server=(localdb)\MSSQLLocalDB;Integrated Security=True;TrustServerCertificate=True;Connect Timeout=10";
 
-    private readonly string _baseConnectionString;
-
-    private TempSqlServerProject(string projectId, SqlServerProjectDatabase database, string baseConnectionString)
+    private TempSqlServerProject(string projectId, SqlServerProjectDatabase database)
     {
         ProjectId = projectId;
         Database = database;
-        _baseConnectionString = baseConnectionString;
     }
 
     public string ProjectId { get; }
@@ -1034,36 +1043,51 @@ internal sealed class TempSqlServerProject : IAsyncDisposable
         }
 
         var projectId = Guid.NewGuid().ToString("N");
-        var database = new SqlServerProjectDatabase(new SqlServerConnectionOptions(baseConnectionString));
+        // 獨立測試庫 JET_Test(與 dev 的 JET_DEV 隔離);每測試在其中建唯一 prj_xxx schema。
+        var database = new SqlServerProjectDatabase(
+            new SqlServerConnectionOptions(baseConnectionString, "JET_Test"));
         await database.EnsureCreatedAsync(projectId, cancellationToken);
-        return new TempSqlServerProject(projectId, database, baseConnectionString);
+        return new TempSqlServerProject(projectId, database);
     }
 
-    /// <summary>DROP 指定專案的 JET_{projectId} 庫(先 SINGLE_USER 斷線);清理失敗不影響測試結果。</summary>
+    /// <summary>
+    /// schema-per-project 清理入口:drop 指定專案在共用單庫的 prj_xxx schema
+    /// (走 <see cref="SqlServerProjectDatabase.DeleteAsync"/>:drop 表 → DROP SCHEMA → 刪 map 列;
+    /// schema 不存在則 no-op)。供經 <c>HandlerTestHost</c>(=composition)建案的呼叫端用作主要/兜底清理
+    /// (ProjectHandlers/QueryDataPreview/WorkpaperExport/DemoRuleOracle/SqlServerImportScaleSmoke/
+    /// ProviderParityJourney)。這些測試的專案由 composition 建在 <c>Sql:Database</c> 預設的 <c>JET_DEV</c> 單庫
+    /// (測試未設 <c>Sql:Database</c> 且 <c>JET_ENVIRONMENT</c> 缺省為 Production → appsettings.Development 不載入),
+    /// 故清理對齊同一 <c>JET_DEV</c> 庫。清理失敗不應讓測試結果失真(殘留空 schema 可手動清)。
+    /// </summary>
     public static async Task DropDatabaseAsync(string baseConnectionString, string projectId)
     {
-        var dbName = $"JET_{projectId}";
+        // 對齊 composition 的單庫名:HandlerTestHost 經 AppCompositionRoot 以 Sql:Database ?? "JET_DEV" 建案,
+        // 測試環境未覆寫該設定 → 專案 schema 落在 JET_DEV。清理需指向同一庫才能真正 drop 該 schema。
+        var database = new SqlServerProjectDatabase(
+            new SqlServerConnectionOptions(baseConnectionString, "JET_DEV"));
         try
         {
-            await using var master = new SqlConnection(
-                new SqlConnectionStringBuilder(baseConnectionString) { InitialCatalog = "master" }.ConnectionString);
-            await master.OpenAsync();
-            await using var drop = master.CreateCommand();
-            drop.CommandText =
-                $"""
-                IF DB_ID(N'{dbName}') IS NOT NULL
-                BEGIN
-                    ALTER DATABASE [{dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-                    DROP DATABASE [{dbName}];
-                END
-                """;
-            await drop.ExecuteNonQueryAsync();
+            await database.DeleteAsync(projectId, CancellationToken.None);
         }
         catch (SqlException)
         {
-            // 清理失敗不應讓測試結果失真;暫時庫殘留可手動清。
+            // 清理失敗不應讓測試結果失真;殘留空 schema 可手動清。
         }
     }
 
-    public async ValueTask DisposeAsync() => await DropDatabaseAsync(_baseConnectionString, ProjectId);
+    /// <summary>
+    /// schema-per-project 清理:只 drop 本專案的 prj_xxx schema(走 DeleteAsync:drop 表 → DROP SCHEMA → 刪 map 列),
+    /// 共用的 JET_Test 庫保留。清理失敗不應讓測試結果失真(殘留的空 schema 可手動清)。
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await Database.DeleteAsync(ProjectId, CancellationToken.None);
+        }
+        catch (SqlException)
+        {
+            // 清理失敗不影響測試結果;殘留空 schema 可手動清。
+        }
+    }
 }

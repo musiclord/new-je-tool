@@ -18,13 +18,12 @@ public sealed class SqlServerMessageLogStore(SqlServerProjectDatabase database) 
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
-            INSERT INTO app_message_log (occurred_utc, level, text) VALUES (@utc, @level, @text);
-            DELETE FROM app_message_log
-            WHERE message_id <= (SELECT MAX(message_id) FROM app_message_log) - @retained;
-            """;
+            INSERT INTO {s}.app_message_log (occurred_utc, level, text) VALUES (@utc, @level, @text);
+            DELETE FROM {s}.app_message_log
+            WHERE message_id <= (SELECT MAX(message_id) FROM {s}.app_message_log) - @retained;
+            """);
         command.Parameters.AddWithValue("@utc", DateTimeOffset.UtcNow.ToString("O"));
         command.Parameters.AddWithValue("@level", level);
         command.Parameters.AddWithValue("@text", text);
@@ -40,13 +39,12 @@ public sealed class SqlServerMessageLogStore(SqlServerProjectDatabase database) 
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT TOP (@limit) occurred_utc, level, text
-            FROM app_message_log
+            FROM {s}.app_message_log
             ORDER BY message_id DESC;
-            """;
+            """);
         command.Parameters.AddWithValue("@limit", limit);
 
         var entries = new List<MessageLogEntry>();

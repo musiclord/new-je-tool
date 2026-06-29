@@ -15,12 +15,13 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
         DbCommand command,
         FilterScenarioSpec scenario,
         FilterRuleContext context,
-        long zeroModulus)
+        long zeroModulus,
+        string schemaPrefix = "")
     {
         string? combined = null;
         foreach (var group in scenario.Groups)
         {
-            var groupSql = BuildGroup(command, group, context, zeroModulus);
+            var groupSql = BuildGroup(command, group, context, zeroModulus, schemaPrefix);
             combined = combined is null
                 ? groupSql
                 : $"({combined} {Op(group.Join)} {groupSql})";
@@ -33,12 +34,13 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
         DbCommand command,
         FilterGroupSpec group,
         FilterRuleContext context,
-        long zeroModulus)
+        long zeroModulus,
+        string schemaPrefix)
     {
         string? combined = null;
         foreach (var rule in group.Rules)
         {
-            var ruleSql = BuildRule(command, rule, context, zeroModulus);
+            var ruleSql = BuildRule(command, rule, context, zeroModulus, schemaPrefix);
             combined = combined is null
                 ? ruleSql
                 : $"({combined} {Op(rule.Join)} {ruleSql})";
@@ -51,12 +53,13 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
         DbCommand command,
         FilterRuleSpec rule,
         FilterRuleContext context,
-        long zeroModulus)
+        long zeroModulus,
+        string schemaPrefix)
     {
         switch (rule.Type)
         {
             case FilterRuleType.Prescreen:
-                return BuildPrescreenRule(command, rule.PrescreenKey!, context, zeroModulus);
+                return BuildPrescreenRule(command, rule.PrescreenKey!, context, zeroModulus, schemaPrefix);
 
             case FilterRuleType.Text:
                 GlFieldWhitelist.TryResolve(rule.Field, out var textColumn);
@@ -76,12 +79,12 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
                 return predicates.ManualAuto(command, rule.IsManual!.Value);
 
             case FilterRuleType.AccountPair:
-                return predicates.AccountPair(command, rule.PairMode!, rule.DebitCategory, rule.CreditCategory);
+                return predicates.AccountPair(command, rule.PairMode!, rule.DebitCategory, rule.CreditCategory, schemaPrefix);
 
             case FilterRuleType.SpecialAccountCategoryPair:
                 // 考量特殊科目類別配對：顯式雙類別 + 否定（drAndCr/drNotCr/notDrCr，否定走述詞內 NOT EXISTS）。
                 return predicates.SpecialAccountCategoryPair(
-                    command, rule.PairMode!, rule.DebitCategory, rule.CreditCategory);
+                    command, rule.PairMode!, rule.DebitCategory, rule.CreditCategory, schemaPrefix);
 
             case FilterRuleType.PeriodInOut:
                 return predicates.PeriodInOut(command, rule.InPeriod!.Value, context.PeriodStart, context.PeriodEnd);
@@ -96,25 +99,26 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
 
             case FilterRuleType.CustomPreparerEntryCount:
                 // 自訂低頻編製者門檻（C6 自訂軌）：maxEntries 取代固定預設 11，述詞同 lowFrequencyPreparer。
-                return predicates.LowFrequencyPreparer(command, rule.MaxEntries!.Value);
+                return predicates.LowFrequencyPreparer(command, rule.MaxEntries!.Value, schemaPrefix);
 
             case FilterRuleType.CustomAccountEntryCount:
                 // 自訂低頻科目門檻（C9 自訂軌）：maxEntries 取代固定預設 11，述詞同 lowFrequencyAccount。
-                return predicates.LowFrequencyAccount(command, rule.MaxEntries!.Value);
+                return predicates.LowFrequencyAccount(command, rule.MaxEntries!.Value, schemaPrefix);
 
             case FilterRuleType.RevenueDebitNearQuarterEnd:
                 // KCT 清單 A：季底視窗由 Domain 純函式自查核期間 + windowDays 算出（識別字不來自使用者）。
                 return predicates.RevenueDebitNearQuarterEnd(
                     command,
-                    QuarterEndWindows.Compute(context.PeriodStart, context.PeriodEnd, rule.WindowDays!.Value));
+                    QuarterEndWindows.Compute(context.PeriodStart, context.PeriodEnd, rule.WindowDays!.Value),
+                    schemaPrefix);
 
             case FilterRuleType.RevenueWithoutNormalCounterpart:
                 // KCT 清單 C：unexpected_account_pair 的否定面（不含 Cash 為一般對方科目）。
-                return predicates.RevenueWithoutNormalCounterpart(command);
+                return predicates.RevenueWithoutNormalCounterpart(command, schemaPrefix);
 
             case FilterRuleType.ManualRevenueEntry:
                 // KCT 清單 D：科目 = Revenue ∧ is_manual = 1。
-                return predicates.ManualRevenueEntry(command);
+                return predicates.ManualRevenueEntry(command, schemaPrefix);
 
             case FilterRuleType.TrailingDigits:
                 // KCT 清單 H：尾數樣態重用 Keywords；顯示金額主單位整數尾數比對。
@@ -133,25 +137,26 @@ public sealed class GlFilterWhereBuilder(GlRulePredicates predicates)
         DbCommand command,
         string prescreenKey,
         FilterRuleContext context,
-        long zeroModulus)
+        long zeroModulus,
+        string schemaPrefix)
     {
         return prescreenKey switch
         {
             PrescreenRuleKeys.PostPeriodApproval => predicates.PostPeriodApproval(command, context.LastPeriodStart!),
             PrescreenRuleKeys.SuspiciousKeywords => predicates.SuspiciousKeywords(command),
-            PrescreenRuleKeys.UnexpectedAccountPair => predicates.UnexpectedAccountPair(command),
+            PrescreenRuleKeys.UnexpectedAccountPair => predicates.UnexpectedAccountPair(command, schemaPrefix),
             PrescreenRuleKeys.TrailingZeros => predicates.TrailingZeros(command, zeroModulus),
-            PrescreenRuleKeys.WeekendPosting => predicates.Weekend("post_date", context.NonWorkingDays),
-            PrescreenRuleKeys.WeekendApproval => predicates.Weekend("approval_date", context.NonWorkingDays),
-            PrescreenRuleKeys.HolidayPosting => predicates.Holiday("post_date"),
-            PrescreenRuleKeys.HolidayApproval => predicates.Holiday("approval_date"),
+            PrescreenRuleKeys.WeekendPosting => predicates.Weekend("post_date", context.NonWorkingDays, schemaPrefix),
+            PrescreenRuleKeys.WeekendApproval => predicates.Weekend("approval_date", context.NonWorkingDays, schemaPrefix),
+            PrescreenRuleKeys.HolidayPosting => predicates.Holiday("post_date", schemaPrefix),
+            PrescreenRuleKeys.HolidayApproval => predicates.Holiday("approval_date", schemaPrefix),
             PrescreenRuleKeys.BlankDescription => predicates.BlankDescription(),
             PrescreenRuleKeys.BackdatedPosting => predicates.Backdated(),
-            PrescreenRuleKeys.NonAuthorizedPreparer => predicates.NonAuthorizedPreparer(),
+            PrescreenRuleKeys.NonAuthorizedPreparer => predicates.NonAuthorizedPreparer(schemaPrefix),
             PrescreenRuleKeys.LowFrequencyPreparer =>
-                predicates.LowFrequencyPreparer(command, PreparerFrequency.DefaultMaxEntries),
+                predicates.LowFrequencyPreparer(command, PreparerFrequency.DefaultMaxEntries, schemaPrefix),
             PrescreenRuleKeys.LowFrequencyAccount =>
-                predicates.LowFrequencyAccount(command, AccountFrequency.DefaultMaxEntries),
+                predicates.LowFrequencyAccount(command, AccountFrequency.DefaultMaxEntries, schemaPrefix),
             _ => throw new InvalidOperationException($"未處理的預篩選鍵 {prescreenKey}。")
         };
     }

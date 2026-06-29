@@ -30,14 +30,16 @@ public sealed class PrescreenRunLoggingTests
         return (diagnostic, factory);
     }
 
-    private static void AssertPrescreenSql(RingBufferLoggerProvider diagnostic, string expectedProvider)
+    // schemaPrefix：SQL Server 端的專案表在 logged SQL 中以 [schema]. 限定（production 同），SQLite 端為 ""。
+    private static void AssertPrescreenSql(
+        RingBufferLoggerProvider diagnostic, string expectedProvider, string schemaPrefix = "")
     {
         var sql = diagnostic.Snapshot().Where(e => e.EventName == "sql.executed").ToList();
         Assert.NotEmpty(sql);
         Assert.All(sql, e => Assert.Equal(expectedProvider, e.Fields["provider"]?.ToString()));
         Assert.All(sql, e => Assert.True(Convert.ToInt64(e.Fields["duration_ms"]) >= 0));
         // 多條 row-tag COUNT 述詞（嫌疑關鍵字、連續零、週末…）皆作用於 target_gl_entry
-        Assert.True(sql.Count(e => e.Fields["sql"]!.ToString()!.Contains("FROM target_gl_entry g")) >= 3);
+        Assert.True(sql.Count(e => e.Fields["sql"]!.ToString()!.Contains($"FROM {schemaPrefix}target_gl_entry g")) >= 3);
         // 編製者彙總（GROUP BY created_by）
         Assert.Contains(sql, e => e.Fields["sql"]!.ToString()!.Contains("GROUP BY created_by"));
         // 後期核准述詞綁定期末日 → parameters 含可辨識值
@@ -81,6 +83,6 @@ public sealed class PrescreenRunLoggingTests
             await repo.RunAsync(temp.ProjectId, FullInput(), CancellationToken.None);
         }
 
-        AssertPrescreenSql(diagnostic, "sqlServer");
+        AssertPrescreenSql(diagnostic, "sqlServer", SqlServerProjectSchema.QualifierFor(temp.ProjectId));
     }
 }

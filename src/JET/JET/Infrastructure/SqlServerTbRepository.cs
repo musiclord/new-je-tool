@@ -40,37 +40,35 @@ public sealed class SqlServerTbRepository(SqlServerProjectDatabase database, ILo
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
         using var txLog = DiagnosticDb.BeginTransaction(_log, Provider);
 
-        await using (var clear = connection.CreateCommand())
+        await using (var clear = database.CreateCommand(connection, projectId,
+            "DELETE FROM {s}.target_tb_balance;"))
         {
             clear.Transaction = transaction;
-            clear.CommandText = "DELETE FROM target_tb_balance;";
             await clear.ExecuteNonQueryLoggedAsync(_log, Provider, cancellationToken);
         }
 
         // 重投影改寫 target,既有規則結果失效(plan Phase 1;投影失敗 rollback 時清除一併回退)。
-        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken);
+        await RuleRunResultReset.ClearWithinAsync(connection, transaction, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
-        var sourceLabels = await ProjectionSourceLabels.LoadAsync(connection, transaction, batchId, cancellationToken);
+        var sourceLabels = await ProjectionSourceLabels.LoadAsync(connection, transaction, batchId, cancellationToken, SqlServerProjectSchema.QualifierFor(projectId));
 
-        await using var select = connection.CreateCommand();
-        select.Transaction = transaction;
-        select.CommandText =
+        await using var select = database.CreateCommand(connection, projectId,
             """
             SELECT row_number, source_no, source_row_number, row_json
-            FROM staging_tb_raw_row
+            FROM {s}.staging_tb_raw_row
             WHERE batch_id = @batchId
             ORDER BY row_number;
-            """;
+            """);
+        select.Transaction = transaction;
         select.Parameters.AddWithValue("@batchId", batchId);
 
-        await using var insert = connection.CreateCommand();
-        insert.Transaction = transaction;
-        insert.CommandText =
+        await using var insert = database.CreateCommand(connection, projectId,
             """
-            INSERT INTO target_tb_balance (
+            INSERT INTO {s}.target_tb_balance (
                 batch_id, source_row_number, account_code, account_name, change_amount_scaled)
             VALUES (@batchId, @sourceRowNumber, @accountCode, @accountName, @changeScaled);
-            """;
+            """);
+        insert.Transaction = transaction;
 
         var pBatch = insert.Parameters.Add("@batchId", SqlDbType.NVarChar, 64);
         var pRowNumber = insert.Parameters.Add("@sourceRowNumber", SqlDbType.BigInt);

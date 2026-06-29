@@ -19,25 +19,23 @@ public sealed class SqlServerFilterHitsPageRepository(SqlServerProjectDatabase d
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.Parameters.AddWithValue("@pos", scenarioPosition);
-
         var hasCursor = PageCursor.TryDecode(request.Cursor, out var cursorKey);
         var keyset = hasCursor ? "AND g.entry_id > @cursor" : string.Empty;
+
+        await using var command = database.CreateCommand(connection, projectId,
+            "SELECT g.document_number, g.line_item, g.post_date, g.account_code, g.account_name, " +
+            "       g.amount_scaled, g.dr_cr, g.document_description, g.entry_id " +
+            "FROM {s}.result_filter_run r " +
+            "JOIN {s}.target_gl_entry g ON g.entry_id = r.entry_id " +
+            "WHERE r.scenario_position = @pos " + keyset + " " +
+            "ORDER BY g.entry_id " + Dialect.LimitClause("@pageSize") + ";");
+        command.Parameters.AddWithValue("@pos", scenarioPosition);
         if (hasCursor)
         {
             command.Parameters.AddWithValue("@cursor", long.Parse(cursorKey));
         }
 
         command.Parameters.AddWithValue("@pageSize", request.ClampedPageSize);
-
-        command.CommandText =
-            "SELECT g.document_number, g.line_item, g.post_date, g.account_code, g.account_name, " +
-            "       g.amount_scaled, g.dr_cr, g.document_description, g.entry_id " +
-            "FROM result_filter_run r " +
-            "JOIN target_gl_entry g ON g.entry_id = r.entry_id " +
-            "WHERE r.scenario_position = @pos " + keyset + " " +
-            "ORDER BY g.entry_id " + Dialect.LimitClause("@pageSize") + ";";
 
         var rows = new List<FilterHitRow>();
         long lastEntryId = 0;

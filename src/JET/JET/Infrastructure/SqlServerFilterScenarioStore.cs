@@ -21,21 +21,20 @@ public sealed class SqlServerFilterScenarioStore(SqlServerProjectDatabase databa
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
-        await using (var delete = connection.CreateCommand())
+        await using (var delete = database.CreateCommand(connection, projectId,
+            "DELETE FROM {s}.config_filter_scenario;"))
         {
             delete.Transaction = transaction;
-            delete.CommandText = "DELETE FROM config_filter_scenario;";
             await delete.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var insert = connection.CreateCommand())
+        await using (var insert = database.CreateCommand(connection, projectId,
+            """
+            INSERT INTO {s}.config_filter_scenario (position, name, rationale, definition_json, saved_utc)
+            VALUES (@position, @name, @rationale, @definitionJson, @savedUtc);
+            """))
         {
             insert.Transaction = transaction;
-            insert.CommandText =
-                """
-                INSERT INTO config_filter_scenario (position, name, rationale, definition_json, saved_utc)
-                VALUES (@position, @name, @rationale, @definitionJson, @savedUtc);
-                """;
 
             var position = insert.Parameters.Add("@position", SqlDbType.Int);
             var name = insert.Parameters.Add("@name", SqlDbType.NVarChar, 400);
@@ -66,13 +65,12 @@ public sealed class SqlServerFilterScenarioStore(SqlServerProjectDatabase databa
         await using var connection = database.CreateConnection(projectId);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var command = database.CreateCommand(connection, projectId,
             """
             SELECT position, name, rationale, definition_json, saved_utc
-            FROM config_filter_scenario
+            FROM {s}.config_filter_scenario
             ORDER BY position;
-            """;
+            """);
 
         var rows = new List<SavedFilterScenario>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
