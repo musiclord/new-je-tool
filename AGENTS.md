@@ -28,7 +28,7 @@ Read `.claude/skills/jet-dev-loop/SKILL.md` for the build → test → runtime-d
 
 ## Non-Negotiable Architecture
 
-- 依賴方向固定為 `Bridge / Form1(Host) → Application → Domain ← Infrastructure`：Infrastructure 僅得引用 Domain；Application 不得引用 Infrastructure。跨層共用契約（`JetActionException` / `JetErrorCodes` / `JetJsonStorage`）一律放 Domain。唯一文件化例外：`Infrastructure/DemoWorkbookWriter` 實作 Application 的 dev-only port `IDemoFileWriter`。
+- 依賴方向固定為 `Bridge / Form1(Host) → Application → Domain ← Infrastructure`：Infrastructure 僅得引用 Domain；Application 不得引用 Infrastructure。跨層共用契約（`JetActionException` / `JetErrorCodes` / `JetJsonStorage`）一律放 Domain。**此依賴方向由 `src/JET/tests/JET.Tests/Architecture/LayerDependencyTests.cs`（NetArchTest 掃 IL，含 method body 內的 `new`）機器把關**：`Application`／`Bridge` 不得依賴 `Infrastructure`、`Domain` 不得依賴任何外層。文件化例外只有「Infrastructure 反向實作 Application 埠」這一類共兩處：`Infrastructure/Export/DemoWorkbookWriter` 實作 dev-only port `IDemoFileWriter`；`Infrastructure/Persistence/SqlServer/SqlServerBackendProbe` 實作 `ISqlServerBackendProbe`（`system.databaseInfo` 後端探測）。
 - `Form1.cs` is a thin WebView2 host. Do not put business logic in WinForms.
 - `Bridge/` only handles WebMessage JSON transport, response wrapping, and action dispatch.
 - Frontend code calls backend only through the `JetApi` boundary. Only `jet-api.js` may own WebView2 transport details.

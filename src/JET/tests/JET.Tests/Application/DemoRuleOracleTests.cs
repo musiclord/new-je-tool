@@ -348,7 +348,7 @@ public sealed class DemoRuleOracleTests
 
     /// <summary>
     /// SQL Server 端的獨立 scalar 重算/防呆查詢:直接對 SqlServerProjectDatabase 開連線
-    /// (同一 base 連線指向 host 已建的 JET_{projectId} 庫),回第一欄為 long。
+    /// (同一 base 連線、預設落在隔離測試庫 JET_Test，對應 host 已建的該專案 schema),回第一欄為 long。
     /// DemoProjectPipeline.QueryScalarAsync 寫死 SQLite,故 SQL Server 路徑另走此處。
     /// </summary>
     private static async Task<long> QuerySqlServerScalarAsync(

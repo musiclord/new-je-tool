@@ -4,6 +4,60 @@
 
 ---
 
+## 2026-07-01 (r5) — 測試連線改由 appsettings 驅動（單一開關）＋測試庫收斂 JET_Test（jetapp 擁有）
+
+承 r4 使用者確認「個人與公司電腦共用同一組設定，唯一差別是 `Sql:Server` 的 `localhost` vs `<ip,port>`」，補上最後一塊：讓**自動測試也以 appsettings 為唯一來源**，否則公司電腦（伺服器在遠端 ip,port）跑 `dotnet test` 會因測試探測寫死 `Server=localhost` 而全數 skip。
+
+- **測試探測改讀 appsettings**：`TempSqlServerProject.ProbeConnectionStringAsync` 未設 `JET_SQLSERVER_CONNECTION` 時，改由 `ConfigurationBuilder().AddJsonFile("appsettings.json")` + `SqlConnectionStringFactory.Build(config, null)` 建立（＝與 app 同一份設定、同一 jetapp SQL 驗證、同一 Server），取代原本的 `Server=localhost` Windows 驗證 fallback。改 appsettings 的 `Sql:Server` 即同時驅動 app 與測試。
+- **測試庫收斂 `JET_Test`（jetapp 擁有）**：測試連 jetapp 後無法開 rich2 擁有的 `JET_DEV`，故把 composition 測試從 `JET_DEV` 收斂到 `JET_Test`（`HandlerTestHost` 的 `singleDatabaseNameOverride`、清理常數、`SqlServerConnectionOptions` 預設值 `"JET_DEV"→"JET_Test"` 一併改；後者修好 6 處以 1 引數建構、靠預設 DB 名的驗證用 helper——`DemoRuleOracle`/`ProjectHandlers`/`ProviderParityJourney`）。以 `ALTER AUTHORIZATION ON DATABASE::JET_Test TO [jetapp]` 把既有 `JET_Test` 轉為 jetapp 擁有（保留、避免建庫競態）。`JET_DEV`（舊 dev 庫）自此不再被測試使用。
+- **兩條路徑皆驗證**：環境變數清空（→ appsettings/jetapp/JET_Test）與環境變數設 Windows 驗證覆寫（→ rich2/JET_Test，sysadmin 可存取）各跑一次全套件，**皆 1113 綠 / 0 失敗 / 0 略過**（0 略過＝SQL Server 測試在 2022 實跑）。建置 0 警告 0 錯誤。
+- **文件**：`jet-guide.md` §13（測試庫 JET_DEV→JET_Test、連線來源改述 appsettings）；順帶修掉數處殘留的 DB-per-project「JET_{projectId} 庫」註解。**未 commit。**
+- **端到端（r4 驗收）**：使用者乾淨重啟 VSCode + F5 後，DMV 實查 `program_name='JET'` 的連線 `login_name=jetapp`（3 條池化連線），GL 121,121 列落在 `JET.prj__60954ba6.staging_gl_raw_row`；SSMS 以 jetapp 登入只見得到 `JET`、開不了 `JET_DEV`/`JET_Test`（權限隔離正確）。
+
+## 2026-07-01 (r4) — SQL Server 改用 SQL 驗證（jetapp／單庫 JET）＋單一 appsettings＋開啟即建庫
+
+承使用者指示：app 開啟時以 **SQL 驗證**（非 Windows AD）測試 `localhost`（或指定 `ip,port`），登入單庫 `JET`——存在即用、不存在則以具建庫權限的登入建立；帳號 `jetapp`／密碼 `password`、全部收斂在單一 `appsettings.json`，不再分 dev／正式。使用者經 `AskUserQuestion` 確認：伺服器端 T-SQL 由我做、服務重啟由使用者做；密碼照要求明文寫進 appsettings。
+
+- **伺服器端（我以 sysadmin 執行 T-SQL）**：`xp_instance_regwrite` 設 `LoginMode=2`（混合模式，**須重啟 MSSQLSERVER 才生效**）；`CREATE LOGIN [jetapp] WITH PASSWORD='password', CHECK_POLICY=OFF`（本機 dev 弱密碼）；`ALTER SERVER ROLE [dbcreator] ADD MEMBER [jetapp]`（可 `CREATE DATABASE [JET]` 並成 owner → 對 JET 完整權限）。驗證：LoginMode 讀回 2、jetapp 存在、dbcreator=1。**本機無管理員權限、無法自行重啟服務**，故 SQL 驗證在使用者重啟前尚未生效。
+- **連線設定收斂**：`appsettings.json` 改為單一 `Sql:*`（`Server=localhost`、`Database=JET`、`IntegratedSecurity=false`、`UserId=jetapp`、`Password=password`、Encrypt/TrustServerCertificate/…）。`SqlConnectionStringFactory` 加 SQL 驗證分支（非整合驗證且有 `UserId` 時帶入 `UserID`/`Password`）。環境變數 `JET_SQLSERVER_CONNECTION` 保留為選用覆寫（正式佈署以它注入安全憑證、密碼不進版控），並已移除本機 User 範圍該變數，讓 app 實走 appsettings 的 SQL 驗證。
+- **開啟即建庫**：`SqlServerProjectDatabase` 新增公開 `EnsureDatabaseReadyAsync`（委派既有 `EnsureSingleDatabaseAndMapAsync`：連 master、非 Express 檢查、`CREATE DATABASE [JET]` if missing、建 `dbo.project_schema_map`）。`AppCompositionRoot.CreateDispatcher` 加 `ensureDatabaseOnStartup`（正式 app 傳 true），在既有非阻斷背景探測中健康檢查後呼叫；失敗只記警告、非致命（登入未生效或伺服器不可達時，稍後建案再試）。
+- **測試隔離**：`CreateDispatcher` 加 `singleDatabaseNameOverride`；`HandlerTestHost` 傳 `"JET_DEV"`，把 composition 建案釘在隔離庫 `JET_DEV`，與 app 正式使用的 `JET` 分離（清理常數不變）。`TempSqlServerProject.ProbeConnectionStringAsync` 在 `JET_SQLSERVER_CONNECTION` 未設定時退回本機 Windows 驗證 `localhost`（測試執行者對 JET_DEV 有完整權限），故移除環境變數後 `[SqlServerFact]` 仍實跑、不全數 skip。
+- **安全註記**：明文密碼進 appsettings 與程式碼原註明的「密碼絕不進 appsettings／原始碼」相反——經使用者明確指示採用（本機／內部單一設定檔取捨）；`SqlConnectionStringFactory` 註解已改寫，並保留 envOverride 作為正式環境注入密碼、不進版控的途徑。
+- **文件**：`jet-guide.md` §13 改寫（單庫 `JET`、appsettings 收斂、SQL 驗證 jetapp、開啟即建庫；順帶修正殘留的 `DROP DATABASE JET_{projectId}` → 現況 `DROP SCHEMA`）。
+- **驗證**：`dotnet build` 0 警告 0 錯誤；環境變數移除後全套件 **1113 綠 / 0 失敗 / 0 略過**（略過為 0 → SQL Server 測試以 Windows 驗證 fallback 實跑於 2022）。未 commit。
+- **待使用者**：以系統管理員**重啟 MSSQLSERVER**（混合模式生效）→ 之後我可驗證 jetapp SQL 驗證登入與 app 開啟時自動建立 `JET`。
+
+## 2026-07-01 (r3) — SQL Server Express 淘汰、遷移至 SQL Server 2022
+
+承 spec 工作流二，並經使用者以 PowerShell 確認本機環境（唯一常設執行個體 `MSSQLSERVER` = SQL Server 2022 Developer 16.0；`JET_SQLSERVER_CONNECTION` = `Server=localhost;Integrated Security=True;TrustServerCertificate=True` 已指向它，測試本即在 2022 上實跑；LocalDB `MSSQLLocalDB` 為 Express 系）後，落地 Express 退場。單庫模型下所有專案共用一個資料庫，會撞 Express 的 10 GB 上限，故 Express 與此模型互斥。
+
+- **執行時硬擋（接口淘汰）**：`SqlServerProjectDatabase` 首次連上單庫時查 `SERVERPROPERTY('EngineEdition')`，為 Express（=4，含 LocalDB）即以新錯誤碼 `sql_server_express_unsupported` 擋下、不建庫（快取一次、非每操作重查）。契約先行：`action-contract-manifest.md` 註冊該碼（並補回漏列的 `sql_server_not_configured`）。
+- **測試環境閘控**：`TempSqlServerProject.ProbeConnectionStringAsync` 移除 LocalDB 預設回退，改為僅接受 `JET_SQLSERVER_CONNECTION` 指向、且「非 Express（EngineEdition≠4）且 ≥ SQL Server 2022（ProductMajorVersion≥16）」的執行個體；不符即回 null → `[SqlServerFact]` 具名 skip（不誤綠）。本機指向 2022 Developer（EngineEdition=3、v16），故所有 `[SqlServerFact]` 仍實跑、無 skip。
+- **前端提示**：`system.databaseInfo` 偵測到 Express 時，摘要句明講「單庫撞 10 GB 上限、Express 已淘汰、請改用 SQL Server 2022」。
+- **新測試（皆綠、非 skip）**：`SqlServerExpressPhaseOutTests` 以本機 LocalDB 作真實 Express 引擎，驗 `EnsureCreatedAsync` 拋 `sql_server_express_unsupported`（實證硬擋在真 Express 上生效）；`SystemDatabaseInfoHandlerTests` 加 Express 摘要斷言（手寫 stub probe）。
+- **文件**：`jet-guide.md` §13 同步改寫（順帶修正該節仍停在 DB-per-project `JET_{projectId}` 的既有漂移，改為現況的單庫 schema-per-project + 隔離守衛 + Express 退場）、`SqlServerProjectDatabase` 類別註解、閘控訊息。
+- **驗證**：`dotnet build` 0 警告 0 錯誤；全套件本機 **1113 綠 / 0 失敗 / 0 略過**（含 SQL Server 2022 實跑）。新增 2 個測試。未 commit。
+- **待續**：工作流三（四層子資料夾化，機械式約 98 檔）；`ProviderRouting*`／雙 provider 收斂與 metadata 單庫集中化列後續獨立 spec。
+
+## 2026-07-01 (r2) — 單庫資料隔離雙守衛落地 + 跨 provider 排序 parity 修復
+
+承同日設計 spec（`docs/superpowers/specs/2026-07-01-single-db-hardening-and-layer-foldering-design.md`），本輪先落地風險最低、價值最高的工作流一（單庫資料隔離守衛）與工作流二的排序 parity 修復。單庫 schema-per-project 下，隔離只靠 schema 牆——一句漏限定的 SQL 就跨專案，故把這條紅線做成機器守衛。
+
+- **工作流一之一：原始碼靜態守衛** `SchemaIsolationGuardTests`（純 `[Fact]`、不需資料庫、毫秒級）。以 `JetSchemaCatalog.All` 為專案表名的唯一事實來源（DRY），掃描 `Infrastructure/Persistence/SqlServer/**` 的 SQL 字面值，斷言每個專案表都經 schema 限定（`{s}.`／`{schemaPrefix}`／方括號），裸引用即轉紅並指出 檔:行:表名；含正向對照證明掃描有牙。掃描一上線揪出 5 個疑點，經逐一查證**全為誤判**：3 個是 `$"..."` 內插字串把 `{s}` 跳脫成 `{{s}}`（執行時仍是 `{s}.`）、2 個是表名當識別字傳給消費端 `"{s}." + table` 串接。掃描器據此補「還原跳脫雙括號」與「完整雙引號字串字面值除外（其限定在消費端、交行為守衛）」兩條規則後轉綠。**現況 SqlServer 路徑裸表名為 0。**
+- **工作流一之二：雙專案行為守衛** `SchemaIsolationJourneyTests`（`[SqlServerFact]`、真實引擎）。同一單庫建 A、B 兩專案（各一個 `prj_` schema），科目代號前綴 A/B 當哨兵，`project.load` 切到各專案走訪 `query.completenessDiffPage`，斷言只回自己 schema 的科目（A 得 `{A1101,A7001,A9001}`、B 得 `{B1101,B7001,B9001}`、互不混入）。本機**實跑通過（非 skip）**，於真實引擎實證跨專案零汙染。與靜態守衛分工：靜態快而粗、行為慢而準。
+- **工作流二 Task 5：排序 parity 修復**。既有唯一紅燈 `CreatorSummaryExport_FullList_IsEquivalentAcrossProviders`（同筆數中文姓名的 tie-break，在 SQLite 位元序 vs SQL Server 預設 collation 相異）修復：`SqlServerCreatorSummaryExportRepository` 的 `ORDER BY … created_by` 加 `COLLATE Latin1_General_BIN2`——BMP 中文姓名的位元序即碼位序，與 SQLite 預設一致。單一呼叫點，故直接於 provider repo 加片段、未抽 `ISqlDialect`（YAGNI，較 spec 原提案更精簡）；ASCII 科目代號/傳票號不受 collation 影響，只此姓名鍵需要。
+- **驗證**：`dotnet build` 0 警告 0 錯誤；全套件本機 **1111 綠 / 0 失敗 / 0 略過**（含 SQL Server 實跑）。新增 3 個測試、修復 1 個紅燈。未 commit。
+- **待續（依 spec/plan）**：工作流二 Task 3（Express 提示強化，小）；Task 4（測試環境改以 SQL Server 2022 閘控——**風險提示：若本機 SQL Server 為 LocalDB/Express，收緊為「非 Express 且 ≥2022」會使目前實跑的 `[SqlServerFact]` 全部轉 skip，需先確認 2022 環境再做**）；工作流三（四層子資料夾化，機械式約 98 檔）；文件更新（Task 10）。
+
+## 2026-07-01 — Infrastructure 分層收納 + 依賴方向機器守衛（LayerDependencyTests）
+
+承使用者對 `src/JET` 系統架構的評估,本輪做兩件**純結構性**整理:把 131 個平鋪在 `Infrastructure/` 的檔案依 jet-guide §14 收進子資料夾,並新增一條約定測試,把「Application 不得依賴 Infrastructure」的鐵律從人工 code review 升級為 CI 可擋。無 wire/action 契約、無規則語意、無 SQL 變更。
+
+- **Infrastructure 子資料夾化(純物理移動、namespace 不變)**:`git mv` 131 檔進 `Persistence/{Sqlite,SqlServer,Routing,}`、`Sql`(provider 中立述詞/WHERE 組譯/reader)、`FileIO`、`Export`、`Diagnostics`。**namespace 一律維持 `JET.Infrastructure`**——與 Application/Domain 的單層 namespace 慣例一致(§14「資料夾不強制 Clean Core」);SDK 自動 glob + namespace 於檔內宣告,故零 `using`／零契約變更、build 逐檔中立。另加 `Infrastructure/.editorconfig` 關 IDE0130,把「分資料夾但不分 namespace」寫成白紙黑字。git 全數認列為 rename(歷史保留)。
+- **LayerDependencyTests(NetArchTest 掃 IL)**:測試專案加 `NetArchTest.Rules`,以命名空間界定層級,斷言 `Application`／`Bridge` 不得依賴 `Infrastructure`、`Domain` 不得依賴任何外層;另立正向對照(Application 內「依賴 Domain」的型別集合非空)防止「命名空間篩出空集合→真空通過」。掃的是 IL,故連 handler 方法本體內 `new SqliteXxx()` 這種型別簽章看不到的違規也抓得到。
+- **守衛一上線即揪出並修掉 9 處既有違規**:紅燈揭露 Application 早已依賴 Infrastructure——(1) 八個 `Query*PageHandler` 消費的 `I*PageRepository` 與 `ITagMatrixScenariosRepository` 共九個埠介面被錯放在 `JET.Infrastructure`,但它們只參照 Domain 型別(`PageResult`/`PageRequest`/row DTO),屬**放錯命名空間的純 Domain 埠**→ 搬到 `Domain/`(比照既有 `IGlRepository` 等 repo 契約皆在 Domain);對應 8 handler 移除多餘 `using JET.Infrastructure;`,三個 `TagMatrixScenarios` 實作補 `using JET.Domain;`。(2) `SystemDatabaseInfoHandler` 直呼 Infrastructure 靜態 `SqlServerHealthCheck.DescribeAsync`→ 引入 Application 埠 `ISqlServerBackendProbe` + 契約 DTO `SqlServerBackendInfo`(由 Infra `SqlServerBackendProbe` 適配靜態 `SqlServerHealthCheck` 實作),handler 改注入埠、合成根改注入適配器。此為第二條「Infrastructure 反向實作 Application 埠」的文件化例外(比照 `DemoWorkbookWriter`→`IDemoFileWriter`);`AGENTS.md` §Non-Negotiable Architecture 與 `principles-map.md` 已同步。
+- **驗證**:`dotnet build` 0 警告 0 錯誤;全套件本機 **1107 綠 / 0 略過**(1108 中),LayerDependencyTests 4 條全綠。唯一紅燈 `ProviderParityJourneyTests.CreatorSummaryExport_FullList_IsEquivalentAcrossProviders` **在本輪動工前的 baseline 即已失敗**——SQLite 與 SQL Server 對「同編製筆數(2326)」的中文姓名 tie-break 排序因 collation 相異而不一致(王小明 2328 兩端皆首位,其餘同筆數者次序分歧);與本輪重整無關,列待查(排序未加 `created_by` 次鍵或未統一 collation)。未 commit。
+
 ## 2026-06-24 (r12) — Step 4 進階篩選 非營業日(I) 改情境層級獨立區塊＋cscript TDD 循環（破例已還原）
 
 使用者實測 r11 後回報：分出第 3 組（空、作用中）時，點 I 竟「加到第 1 組」、且 I 卡高亮。使用者**破例授權對前端做可測改造**以跑完整 TDD 循環（因手動 GUI 無法回報完整資訊），並要求**確認後還原破例物**。

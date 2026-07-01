@@ -3,8 +3,8 @@ using Xunit;
 namespace JET.Tests.Infrastructure;
 
 /// <summary>
-/// SQL Server LocalDB 可用性的單一探測點(整輪只探一次,結果快取)。
-/// 連線取自 JET_SQLSERVER_CONNECTION,否則用預設 LocalDB；探測即沿用
+/// SQL Server 可用性的單一探測點(整輪只探一次,結果快取)。
+/// 連線取自 JET_SQLSERVER_CONNECTION,未設定則由 appsettings.json（Sql:*、SQL 驗證 jetapp）建立；探測即沿用
 /// <see cref="TempSqlServerProject.ProbeConnectionStringAsync"/>,不另寫一份探測邏輯。
 /// </summary>
 internal static class SqlServerAvailability
@@ -16,7 +16,7 @@ internal static class SqlServerAvailability
     public static bool IsAvailable => ConnectionString.Value is not null;
 
     public const string SkipReason =
-        "無 SQL Server LocalDB(連線取自 JET_SQLSERVER_CONNECTION,預設 (localdb)\\MSSQLLocalDB)——略過 SQL Server / provider 等價測試。";
+        "無可用的 SQL Server 2022+（非 Express）：連線取自 JET_SQLSERVER_CONNECTION，未設定則由 appsettings.json（Sql:*、SQL 驗證 jetapp）建立。Express/舊版已淘汰——連不上、或連到 Express/< 2022 即略過 SQL Server / provider 等價測試。";
 }
 
 /// <summary>

@@ -1121,7 +1121,7 @@ public sealed class ImportGlCommandHandler(IGlRepository gl, IGlFileReader reade
 
 JET 同時支援兩個資料庫 provider，依案件規模與部署情境來選用，但兩者共用同一組 repository contract。本節說明這兩個 provider 各自的定位、設計如何落實、方言差異怎麼處理，以及如何做等價測試。
 
-SQLite 與 SQL Server 這兩個 provider 都已經全面落地（2026-06-14）。每一個 per-project（每專案）的 repository 都備有 `Sqlite*` 與 `SqlServer*` 兩套實作，再經 `ProviderRouting*` 包裝，依案件所選的 provider 做路由。涵蓋的 repository 包括 Gl、Tb、Import、MappingState、Calendar、AccountMapping、ValidationRun、PrescreenRun、FilterRun、RuleRun、FilterScenario、DataPreview、MessageLog 與 DevDatabaseInspector。完整的工作流程（建案、匯入、配對、驗證、預篩選、進階篩選，含 resume 與刪除）在兩個 provider 下是端到端等價的，這由一組受 LocalDB 閘控的 golden journey 測試實際跑過驗證。DuckDB 目前仍保留為未來候選的分析型 provider，它必須先通過本節的 benchmark gate 才能採用；也因此，初期設計就持續避免把 SQLite 寫死進 Application 或 frontend。
+SQLite 與 SQL Server 這兩個 provider 都已經全面落地（2026-06-14）。每一個 per-project（每專案）的 repository 都備有 `Sqlite*` 與 `SqlServer*` 兩套實作，再經 `ProviderRouting*` 包裝，依案件所選的 provider 做路由。涵蓋的 repository 包括 Gl、Tb、Import、MappingState、Calendar、AccountMapping、ValidationRun、PrescreenRun、FilterRun、RuleRun、FilterScenario、DataPreview、MessageLog 與 DevDatabaseInspector。完整的工作流程（建案、匯入、配對、驗證、預篩選、進階篩選，含 resume 與刪除）在兩個 provider 下是端到端等價的，這由一組受 SQL Server 2022 閘控（非 Express；連線取自 `JET_SQLSERVER_CONNECTION`，未設定則由 app 的單一 `appsettings.json` 建立，與 app 共用同一份設定）的 golden journey 測試實際跑過驗證。DuckDB 目前仍保留為未來候選的分析型 provider，它必須先通過本節的 benchmark gate 才能採用；也因此，初期設計就持續避免把 SQLite 寫死進 Application 或 frontend。
 
 ### 核心原則
 
@@ -1161,9 +1161,9 @@ Provider 在案件建立時就選定，並寫入 `project.json` 的 `databasePro
 - 每個 `ProviderRouting*` 方法會先呼叫 `ResolveAsync(projectId)`，再用 `ProviderSelection.Pick` 委派給對應的 `Sqlite*` 或 `SqlServer*` 實作。遇到未知的 provider 就回 `unsupported_provider`。
 - Application 層的 handler 只注入 repository 介面，完全不感知 provider 或方言。
 
-隔離模型是「每專案一個資料庫」。SQLite 的資料庫落地在 `projects/{projectId}/jet.db`，這個檔案本身就構成 scope。SQL Server 則是在一個共用 instance 上的 `JET_{projectId}` 資料庫，它的資料表不帶 `project_id` 欄，忠實對應「每專案一個 jet.db」這個模型。SQL Server 的 base 連線字串取自環境變數 `JET_SQLSERVER_CONNECTION`，而 `InitialCatalog` 由 provider 依專案覆寫。如果這個環境變數沒設定，SQLite 專案不受影響；但選了 sqlServer 的案件，會在連線時得到一個明確的 `sql_server_not_configured` 錯誤。要注意 SQL Server Express（用於開發，例如 LocalDB 的 `(localdb)\MSSQLLocalDB`）與 Standard、Enterprise（用於生產）共用同一套實作，兩者的差異僅在連線字串，不會為 Express 另外建一個獨立 provider。
+隔離模型是「每專案一個資料庫」。SQLite 的資料庫落地在 `projects/{projectId}/jet.db`，這個檔案本身就構成 scope。SQL Server 則是**單一資料庫、每專案一個 schema**（`prj_<淨化>_<8hex>`，由純函式 `SqlServerProjectSchema.For` 衍生）：所有專案共用同一個資料庫 `JET`（單一設定、不再分開發／生產；測試另以隔離庫 `JET_Test`（jetapp 擁有）執行、由 `singleDatabaseNameOverride` 釘住），事實表建在各自 schema 內、不帶 `project_id` 欄，跨專案反查表 `dbo.project_schema_map` 記錄 schema→專案。隔離只靠 schema 牆，故所有專案表 SQL 一律經單一收斂點加 schema 限定（`SqlServerProjectDatabase.CreateCommand` 的 `{s}` 哨兵或述詞層 `schemaPrefix`）；此不變量由 `SchemaIsolationGuardTests`（原始碼靜態掃描）與 `SchemaIsolationJourneyTests`（雙專案行為）雙守衛機器把關。SQL Server 的連線設定收斂在單一 `appsettings.json` 的 `Sql:*`（伺服器 `localhost` 或指定 `ip,port`、資料庫 `JET`、**SQL 驗證**帳號 `jetapp`、非 Windows AD），不再分開發／生產版本；環境變數 `JET_SQLSERVER_CONNECTION` 為選用覆寫（正式佈署以它注入安全憑證、密碼不進版控）。`InitialCatalog` 即該單一資料庫、由 provider 依設定覆寫（不再依專案切換庫名）。app 開啟時即測試連線並確保單庫 `JET` 存在（`EnsureDatabaseReadyAsync`：不存在則以設定登入建立，該登入需 `dbcreator`）。連線設定缺失時，SQLite 專案不受影響；選了 sqlServer 的案件會在連線時得到明確的 `sql_server_not_configured` 錯誤。**SQL Server Express（含 LocalDB）已淘汰**：單庫模型下所有專案共用一個資料庫，會撞 Express 的 10 GB 上限，故「SQL Server」選項的目標引擎為 SQL Server 2022（開發用 Developer、生產用 Standard／Enterprise）；連到 Express（`EngineEdition=4`）時第一次資料庫觸碰即以 `sql_server_express_unsupported` 擋下、不建庫，開發／測試環境亦以「非 Express 且 ≥ 2022」為閘控。2022 的各版別（Developer／Standard／Enterprise）共用同一套實作，差異僅在連線字串。
 
-已建立的案件，不得在同一次規則執行中混用 SQLite 與 SQL Server。刪除專案（`project.delete`）時會把資料庫一併移除：SQLite 走刪除 `jet.db` 的路徑（刪之前先呼叫 `SqliteConnection.ClearAllPools()` 釋放檔案鎖），SQL Server 走 `DROP DATABASE JET_{projectId}` 的路徑（drop 之前先 `SET SINGLE_USER WITH ROLLBACK IMMEDIATE`）。這兩條路徑同樣都經過 `ProviderRouting` 路由。
+已建立的案件，不得在同一次規則執行中混用 SQLite 與 SQL Server。刪除專案（`project.delete`）時會把資料庫一併移除：SQLite 走刪除 `jet.db` 的路徑（刪之前先呼叫 `SqliteConnection.ClearAllPools()` 釋放檔案鎖），SQL Server 走「drop 該專案 schema 內的表後 `DROP SCHEMA`、再刪 `dbo.project_schema_map` 對應列」的路徑（單庫保留、只移除該專案 schema）。這兩條路徑同樣都經過 `ProviderRouting` 路由。
 
 ### 金額儲存與計算
 

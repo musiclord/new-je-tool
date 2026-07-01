@@ -669,7 +669,7 @@ public sealed class ProviderParityJourneyTests
         try
         {
             var sqlServerContext = await DemoProjectPipeline.SetupAsync(sqlServerHost, databaseProvider: "sqlServer");
-            // 同一 base 連線指向同一 instance;CreateConnection(projectId) 對應 host 已建的 JET_{projectId} 庫。
+            // 同一 base 連線指向同一 instance;預設落在隔離測試庫 JET_Test，CreateConnection(projectId) 對應 host 已建的該專案 schema。
             var sqlServerRepo = new SqlServerCreatorSummaryExportRepository(
                 new SqlServerProjectDatabase(new SqlServerConnectionOptions(connectionString)));
             var sqlServerList = Flatten(
@@ -729,7 +729,7 @@ public sealed class ProviderParityJourneyTests
             var sqlServerProjectId = await InlineWorkbookProject.SetupAsync(
                 sqlServerHost, ConfigureCompletenessGl, databaseProvider: "sqlServer",
                 configureTb: ConfigureCompletenessTb);
-            // 同一 base 連線指向同一 instance;CreateConnection(projectId) 對應 host 已建的 JET_{projectId} 庫。
+            // 同一 base 連線指向同一 instance;預設落在隔離測試庫 JET_Test，CreateConnection(projectId) 對應 host 已建的該專案 schema。
             var sqlServerRepo = new SqlServerCompletenessAccountPageRepository(
                 new SqlServerProjectDatabase(new SqlServerConnectionOptions(connectionString)));
             var sqlServerSequence = await WalkCompletenessAccountPagesAsync(sqlServerRepo, sqlServerProjectId, pageSize);
@@ -1329,7 +1329,7 @@ public sealed class ProviderParityJourneyTests
         {
             var sqlServerContext = await DemoProjectPipeline.SetupAsync(sqlServerHost, databaseProvider: "sqlServer");
             await ImportDemoAccountMappingAsync(sqlServerHost);
-            // 同一 base 連線指向同一 instance;CreateConnection(projectId) 對應 host 已建的 JET_{projectId} 庫。
+            // 同一 base 連線指向同一 instance;預設落在隔離測試庫 JET_Test，CreateConnection(projectId) 對應 host 已建的該專案 schema。
             var sqlServerRepo = new SqlServerAccountMappingExportRepository(
                 new SqlServerProjectDatabase(new SqlServerConnectionOptions(connectionString)));
             var sqlServerList = FlattenAccountMapping(

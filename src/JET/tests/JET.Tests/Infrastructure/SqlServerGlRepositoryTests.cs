@@ -3,6 +3,7 @@ using System.Text.Json;
 using JET.Domain;
 using JET.Infrastructure;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace JET.Tests.Infrastructure;
@@ -991,16 +992,13 @@ public sealed class SqlServerGlRepositoryTests
 
 /// <summary>
 /// 測試用 SQL Server 暫時專案(schema-per-project 模型):所有測試共用獨立測試庫 JET_Test
-/// (與 dev 的 JET_DEV 隔離),每測試在其中建唯一的 prj_xxx schema;Dispose 時只 drop 該專案的 schema
+/// (jetapp 擁有、與 app 正式的 JET 分離),每測試在其中建唯一的 prj_xxx schema;Dispose 時只 drop 該專案的 schema
 /// (走 <see cref="SqlServerProjectDatabase.DeleteAsync"/>:drop 表 → DROP SCHEMA → 刪 map 列),
 /// 共用的 JET_Test 庫不每測刪除(多測平行共用,殘留的只剩已清空 schema,無害)。
-/// TryCreateAsync 連不上 LocalDB 即回 null(呼叫端據此跳過)。
+/// TryCreateAsync 連不上(或連到 Express／< 2022)即回 null(呼叫端據此跳過)。
 /// </summary>
 internal sealed class TempSqlServerProject : IAsyncDisposable
 {
-    private const string DefaultLocalDb =
-        @"Server=(localdb)\MSSQLLocalDB;Integrated Security=True;TrustServerCertificate=True;Connect Timeout=10";
-
     private TempSqlServerProject(string projectId, SqlServerProjectDatabase database)
     {
         ProjectId = projectId;
@@ -1011,17 +1009,56 @@ internal sealed class TempSqlServerProject : IAsyncDisposable
 
     public SqlServerProjectDatabase Database { get; }
 
-    /// <summary>連得上 LocalDB/Express 即回 base 連線字串,否則 null(呼叫端據此跳過 SQL Server 測試)。</summary>
+    /// <summary>
+    /// 回 base 連線字串當且僅當 <c>JET_SQLSERVER_CONNECTION</c> 指向**可連線、非 Express、且 ≥ SQL Server 2022**
+    /// 的執行個體;否則回 null(呼叫端據此跳過 SQL Server 測試)。Express(含 LocalDB)已淘汰——單庫模型下所有
+    /// 專案共用一個資料庫,會撞 Express 的 10 GB 上限,故不再預設回退 LocalDB、也不在 Express 上實跑。
+    /// </summary>
     public static async Task<string?> ProbeConnectionStringAsync(CancellationToken cancellationToken = default)
     {
-        var baseConnectionString =
-            Environment.GetEnvironmentVariable("JET_SQLSERVER_CONNECTION") ?? DefaultLocalDb;
+        // 連線來源（單一開關）：環境變數 JET_SQLSERVER_CONNECTION 優先（顯式覆寫）；未設定則由 app 的
+        // 單一 appsettings.json（Sql:*，含 Server 與 SQL 驗證 jetapp）建立——與 app 走同一份設定，故改
+        // appsettings 的 Server 即同時驅動 app 與測試（個人 localhost／公司 <ip,port>）。測試連的是隔離庫
+        // JET_Test（jetapp 為 dbcreator/owner），不碰 app 正式的 JET；非 Express、< 2022 仍在下方排除。
+        var baseConnectionString = Environment.GetEnvironmentVariable("JET_SQLSERVER_CONNECTION");
+        if (string.IsNullOrWhiteSpace(baseConnectionString))
+        {
+            IConfiguration config = new ConfigurationBuilder()
+                .SetBasePath(AppContext.BaseDirectory)
+                .AddJsonFile("appsettings.json", optional: true)
+                .Build();
+            baseConnectionString = SqlConnectionStringFactory.Build(config, null);
+        }
+        if (string.IsNullOrWhiteSpace(baseConnectionString))
+        {
+            return null; // 環境變數與 appsettings 皆未提供 → 跳過
+        }
 
         try
         {
             await using var probe = new SqlConnection(
                 new SqlConnectionStringBuilder(baseConnectionString) { InitialCatalog = "master" }.ConnectionString);
             await probe.OpenAsync(cancellationToken);
+
+            // 淘汰 Express(EngineEdition=4,含 LocalDB)與 < SQL Server 2022(ProductMajorVersion<16):這類引擎上
+            // 一律跳過、不實跑。Developer/Enterprise 為 EngineEdition 3、Standard 為 2,皆不受影響。
+            await using var caps = probe.CreateCommand();
+            caps.CommandText =
+                "SELECT CAST(SERVERPROPERTY('EngineEdition') AS int), " +
+                "CAST(SERVERPROPERTY('ProductMajorVersion') AS int);";
+            await using var reader = await caps.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                const int expressEngineEdition = 4;
+                const int sqlServer2022MajorVersion = 16;
+                var engineEdition = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+                var majorVersion = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                if (engineEdition == expressEngineEdition || majorVersion < sqlServer2022MajorVersion)
+                {
+                    return null; // Express 或 < 2022 → 已淘汰,跳過
+                }
+            }
+
             return baseConnectionString;
         }
         catch (SqlException)
@@ -1043,7 +1080,7 @@ internal sealed class TempSqlServerProject : IAsyncDisposable
         }
 
         var projectId = Guid.NewGuid().ToString("N");
-        // 獨立測試庫 JET_Test(與 dev 的 JET_DEV 隔離);每測試在其中建唯一 prj_xxx schema。
+        // 獨立測試庫 JET_Test(jetapp 擁有、與 app 正式的 JET 分離);每測試在其中建唯一 prj_xxx schema。
         var database = new SqlServerProjectDatabase(
             new SqlServerConnectionOptions(baseConnectionString, "JET_Test"));
         await database.EnsureCreatedAsync(projectId, cancellationToken);
@@ -1055,16 +1092,16 @@ internal sealed class TempSqlServerProject : IAsyncDisposable
     /// (走 <see cref="SqlServerProjectDatabase.DeleteAsync"/>:drop 表 → DROP SCHEMA → 刪 map 列;
     /// schema 不存在則 no-op)。供經 <c>HandlerTestHost</c>(=composition)建案的呼叫端用作主要/兜底清理
     /// (ProjectHandlers/QueryDataPreview/WorkpaperExport/DemoRuleOracle/SqlServerImportScaleSmoke/
-    /// ProviderParityJourney)。這些測試的專案由 composition 建在 <c>Sql:Database</c> 預設的 <c>JET_DEV</c> 單庫
-    /// (測試未設 <c>Sql:Database</c> 且 <c>JET_ENVIRONMENT</c> 缺省為 Production → appsettings.Development 不載入),
-    /// 故清理對齊同一 <c>JET_DEV</c> 庫。清理失敗不應讓測試結果失真(殘留空 schema 可手動清)。
+    /// ProviderParityJourney)。這些測試的專案由 composition 建在隔離庫 <c>JET_Test</c>——HandlerTestHost 以
+    /// <c>singleDatabaseNameOverride:"JET_Test"</c> 釘住,與 app 正式使用的 <c>JET</c> 庫隔離(app 走 appsettings),
+    /// 故清理對齊同一 <c>JET_Test</c> 庫。清理失敗不應讓測試結果失真(殘留空 schema 可手動清)。
     /// </summary>
     public static async Task DropDatabaseAsync(string baseConnectionString, string projectId)
     {
-        // 對齊 composition 的單庫名:HandlerTestHost 經 AppCompositionRoot 以 Sql:Database ?? "JET_DEV" 建案,
-        // 測試環境未覆寫該設定 → 專案 schema 落在 JET_DEV。清理需指向同一庫才能真正 drop 該 schema。
+        // 對齊 composition 的單庫名:HandlerTestHost 以 singleDatabaseNameOverride:"JET_Test" 建案,
+        // 專案 schema 落在 JET_Test(與 app 的 JET 庫隔離)。清理需指向同一庫才能真正 drop 該 schema。
         var database = new SqlServerProjectDatabase(
-            new SqlServerConnectionOptions(baseConnectionString, "JET_DEV"));
+            new SqlServerConnectionOptions(baseConnectionString, "JET_Test"));
         try
         {
             await database.DeleteAsync(projectId, CancellationToken.None);

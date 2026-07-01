@@ -33,7 +33,9 @@ internal sealed class HandlerTestHost : IDisposable
             _events,
             sqlServerConnectionString,
             _diagnostic,
-            DiagnosticLogDirectory);
+            DiagnosticLogDirectory,
+            // 測試釘住隔離庫 JET_Test（jetapp 擁有），與 app 正式使用的 JET 庫隔離（app 走 appsettings 的 Sql:Database=JET）。
+            singleDatabaseNameOverride: "JET_Test");
     }
 
     public ActionDispatcher Dispatcher { get; }

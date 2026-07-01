@@ -23,7 +23,9 @@ public static class AppCompositionRoot
 #endif
         return CreateDispatcher(
             hostShell, GetProjectsRootPath(), enableDevTools, eventPublisher,
-            diagnosticLogDirectory: GetDiagnosticLogDirectory());
+            diagnosticLogDirectory: GetDiagnosticLogDirectory(),
+            // 正式 app：開啟時就測試 SQL Server 連線並確保單庫 JET 存在（不存在則以設定登入建立）。
+            ensureDatabaseOnStartup: true);
     }
 
     /// <summary>測試可注入 temp projects root 與開發工具旗標（測試預設啟用以涵蓋 dev.db.* 契約）。</summary>
@@ -34,19 +36,19 @@ public static class AppCompositionRoot
         IJetEventPublisher? eventPublisher = null,
         string? sqlServerConnectionString = null,
         RingBufferLoggerProvider? diagnosticLoggerProvider = null,
-        string? diagnosticLogDirectory = null)
+        string? diagnosticLogDirectory = null,
+        string? singleDatabaseNameOverride = null,
+        bool ensureDatabaseOnStartup = false)
     {
         var folder = new JetProjectFolder(projectsRootPath);
         var projectStore = new JsonFileProjectStore(folder);
         var database = new JetProjectDatabase(folder);
 
-        // 連線設定分層(Task 8):appsettings.json(基底、進庫) + appsettings.{env}.json(本機覆寫),
-        // env 取 JET_ENVIRONMENT(缺省 Production);兩檔皆 optional,缺檔時退回環境變數/預設、不致命。
-        var environmentName = Environment.GetEnvironmentVariable("JET_ENVIRONMENT") ?? "Production";
+        // 連線設定:單一 appsettings.json(不分環境版本;每機差異走環境變數 JET_SQLSERVER_CONNECTION 覆寫)。
+        // optional:true — 缺檔時退回環境變數/安全預設、不致命。
         IConfiguration config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true)
-            .AddJsonFile($"appsettings.{environmentName}.json", optional: true)
             .Build();
 
         // 多 provider:每個每專案 repo 依專案 databaseProvider 路由到 SQLite 或 SQL Server 實作
@@ -56,7 +58,9 @@ public static class AppCompositionRoot
         // 單庫名顯式取自 Sql:Database(安全預設 JET_DEV);InitialCatalog 由 provider 依專案覆寫,sqlite 專案不受影響。
         var envOverride = sqlServerConnectionString ?? Environment.GetEnvironmentVariable("JET_SQLSERVER_CONNECTION");
         var sqlServerConnString = SqlConnectionStringFactory.Build(config, envOverride);
-        var singleDatabaseName = config["Sql:Database"] ?? "JET_DEV";
+        // 單庫名：測試以 singleDatabaseNameOverride 釘住隔離庫；app 走設定 Sql:Database（單一 appsettings.json）；
+        // 皆缺時以安全預設 JET_DEV 兜底。InitialCatalog 由 provider 依此覆寫，sqlite 專案不受影響。
+        var singleDatabaseName = singleDatabaseNameOverride ?? config["Sql:Database"] ?? "JET_DEV";
         var sqlServerDatabase = new SqlServerProjectDatabase(new SqlServerConnectionOptions(
             sqlServerConnString, singleDatabaseName));
         var providerResolver = new ProjectProviderResolver(projectStore);
@@ -111,6 +115,23 @@ public static class AppCompositionRoot
                 else
                 {
                     startupLogger.LogWarning("{HealthMessage}", health.Message);
+                }
+
+                // 開啟即建庫（正式 app）：確保單庫存在（不存在則以設定登入建立）與反查表就位。
+                // 非致命——登入未生效（剛切混合模式未重啟）或伺服器不可達時只記警告，稍後建案再試。
+                if (ensureDatabaseOnStartup)
+                {
+                    try
+                    {
+                        await sqlServerDatabase.EnsureDatabaseReadyAsync(CancellationToken.None).ConfigureAwait(false);
+                        startupLogger.LogInformation(
+                            "SQL Server 單一資料庫 {Database} 已就緒（不存在則已建立）。", singleDatabaseName);
+                    }
+                    catch (Exception ex)
+                    {
+                        startupLogger.LogWarning(ex,
+                            "啟動時確保 SQL Server 單一資料庫失敗（非致命，稍後建案時再試）。");
+                    }
                 }
             });
         }
@@ -223,7 +244,7 @@ public static class AppCompositionRoot
             // 正式契約 handlers
             new SystemPingHandler(enableDevTools),
             // SQL Server 後端身分（去敏）：前端啟動後查一次,在訊息面板顯示連到哪台/版本/是否 Express。
-            new SystemDatabaseInfoHandler(sqlServerConnString, singleDatabaseName),
+            new SystemDatabaseInfoHandler(new SqlServerBackendProbe(sqlServerConnString, singleDatabaseName)),
             new ProjectListHandler(projectStore),
             new ProjectCreateHandler(projectStore, databaseInitializer, session),
             new ProjectLoadHandler(

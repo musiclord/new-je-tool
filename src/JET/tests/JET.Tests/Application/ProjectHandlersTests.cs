@@ -181,7 +181,7 @@ public sealed class ProjectHandlersTests
         }
         finally
         {
-            // schema-per-project：清掉兩案在共用單庫（測試 host 預設 JET_DEV）留下的 prj_xxx schema。
+            // schema-per-project：清掉兩案在共用單庫（測試 host 釘住 JET_Test）留下的 prj_xxx schema。
             var db = new SqlServerProjectDatabase(new SqlServerConnectionOptions(connectionString));
             await db.DeleteAsync(nameA, CancellationToken.None);
             await db.DeleteAsync(nameB, CancellationToken.None);
@@ -496,8 +496,9 @@ public sealed class ProjectHandlersTests
             .Any(p => p.GetProperty("projectId").GetString() == projectId);
     }
 
-    // schema-per-project 模型下,共用單庫即 AppCompositionRoot 的安全預設 JET_DEV(測試 host 未設 Sql:Database)。
-    private const string SingleDatabaseName = "JET_DEV";
+    // schema-per-project 模型下,測試用共用單庫為隔離庫 JET_Test（jetapp 擁有）——HandlerTestHost 以
+    // singleDatabaseNameOverride:"JET_Test" 釘住,與 app 正式使用的 JET 庫隔離。
+    private const string SingleDatabaseName = "JET_Test";
 
     /// <summary>
     /// 該專案衍生的 schema 是否存在於共用單庫(SCHEMA_ID;schema 名以參數綁定)。

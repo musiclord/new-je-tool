@@ -14,7 +14,7 @@
 
 本專案那條「依賴方向不可違反」的鐵律,就是 SOLID 的具體化。權威在 `AGENTS.md` §Non-Negotiable Architecture:
 
-- **依賴反轉(DIP)**:依賴方向是 `Bridge / Form1(Host) → Application → Domain ← Infrastructure`。Application 不得引用 Infrastructure。跨層共用的契約(`JetActionException`、`JetErrorCodes`、`JetJsonStorage`)一律放在 Domain。唯一一個有文件記載的例外是 `Infrastructure/DemoWorkbookWriter`,它實作了 Application 那個 dev-only 的 port `IDemoFileWriter`。
+- **依賴反轉(DIP)**:依賴方向是 `Bridge / Form1(Host) → Application → Domain ← Infrastructure`。Application 不得引用 Infrastructure。跨層共用的契約(`JetActionException`、`JetErrorCodes`、`JetJsonStorage`)一律放在 Domain。這條方向由 `src/JET/tests/JET.Tests/Architecture/LayerDependencyTests.cs`(NetArchTest 掃 IL)機器把關。有文件記載的例外是「Infrastructure 反向實作 Application 埠」:`DemoWorkbookWriter` 實作 dev-only 的 `IDemoFileWriter`、`SqlServerBackendProbe` 實作 `ISqlServerBackendProbe`。
 - **單一職責(SRP)**:每一層只做一件事。`Form1.cs` 是個 thin WebView2 host,不含業務邏輯;`Bridge/` 只負責 WebMessage 的 JSON 傳輸與 action 分派;`Application/` 擁有各個 use case;`Domain/` 是純規則、不依賴任何 framework;`Infrastructure/` 擁有檔案 I/O 與各 provider 專屬的 SQL。
 - **開放封閉 / 里氏替換**:在同一個 Domain repository 介面之下,SQLite 與 SQL Server 是可互相替換的實作。provider 的分支只出現在 Infrastructure(`ProviderRouting*`),handler 只看得到介面、感知不到背後是哪個 provider(見 `docs/jet-guide.md` §13)。
 
